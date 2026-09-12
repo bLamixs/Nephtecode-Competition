@@ -1,5 +1,23 @@
+# Virtual environment
 venv/
+.env
+
+# Large raw & processed datasets
 *.rar
-*.csv
-data/
+data/raw/*.csv
+data/processed/*
+!data/processed/.gitkeep
+
+# Logs & outputs
+logs/*
+!logs/.gitkeep
+output/*
+!output/.gitkeep
+
+# System & Python cache
 .DS_Store
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.ipynb_checkpoints/

@@ -61,8 +61,14 @@ def build_master_dataset(avt_path, hydro_path, pak_path, lims_path):
 
     return df_master
 
-# Запуск
-master_df = build_master_dataset('data/avt_tags.csv', 'data/242000_tags.csv', 
-                                'ПАК.xlsx', 'ЛИМСы.xlsx')
-master_df.to_csv('master_dataset.csv', index=False)
-print(master_df.head())
+if __name__ == "__main__":
+    # Запуск по умолчанию
+    master_df = build_master_dataset(
+        'data/raw/avt_tags.csv', 
+        'data/raw/242000_tags.csv', 
+        'data/raw/ПАК.xlsx', 
+        'data/raw/ЛИМСы.xlsx'
+    )
+    master_df.to_csv('data/processed/master_dataset.csv', index=False)
+    print("Датасет сохранён в data/processed/master_dataset.csv")
+    print(master_df.head())
