@@ -1,0 +1,5 @@
+venv/
+*.rar
+*.csv
+data/
+.DS_Store
