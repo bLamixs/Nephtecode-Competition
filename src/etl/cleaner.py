@@ -1,7 +1,7 @@
 import pandas as pd
 
 print("1. Загрузка собранной витрины...")
-df = pd.read_csv('master_dataset.csv', parse_dates=['date'])
+df = pd.read_csv('data/processed/master_dataset.csv', parse_dates=['date'])
 initial_shape = df.shape[0]
 
 print("2. Очистка от простоев и стартовых пустых значений...")
@@ -32,6 +32,6 @@ print(f"Размер Train (обучение): {train_df.shape[0]} строк")
 print(f"Размер Test (проверка): {test_df.shape[0]} строк")
 
 # Сохраняем готовые датасеты
-train_df.to_csv('train_data.csv', index=False)
-test_df.to_csv('test_data.csv', index=False)
-print("Готово! Данные сохранены.")
+train_df.to_csv('data/processed/train_data.csv', index=False)
+test_df.to_csv('data/processed/test_data.csv', index=False)
+print("Готово! Данные сохранены в data/processed/")

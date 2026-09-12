@@ -1,0 +1,72 @@
+# Справочник ключевых тегов КИП и управляемых параметров (MV)
+manipulated_variables:
+  # Расходы сырья АВТ
+  F7:
+    description: "Расход сырой нефти поток 1"
+    unit: "т/ч"
+    default_range: [80.0, 160.0]
+  F8:
+    description: "Расход сырой нефти поток 2"
+    unit: "т/ч"
+    default_range: [80.0, 160.0]
+  F9:
+    description: "Расход сырой нефти поток 3"
+    unit: "т/ч"
+    default_range: [80.0, 160.0]
+
+  # Температуры и режим гидроочистки (24-2000)
+  T11:
+    description: "Температура на входе в реактор гидроочистки Р-201"
+    unit: "°C"
+    default_range: [320.0, 375.0]
+  T23:
+    description: "Температура в реакторе гидроочистки"
+    unit: "°C"
+    default_range: [330.0, 380.0]
+  F26:
+    description: "Расход сырья на гидроочистку"
+    unit: "т/ч"
+    default_range: [150.0, 260.0]
+  P8:
+    description: "Давление в реакторном блоке гидроочистки"
+    unit: "кгс/см2"
+    default_range: [25.0, 40.0]
+  P24:
+    description: "Давление ВСГ (водородсодержащего газа)"
+    unit: "кгс/см2"
+    default_range: [20.0, 38.0]
+
+  # Доли компонентов блендинга
+  F30:
+    description: "Компонент блендинга 1"
+    unit: "%"
+    default_range: [10.0, 50.0]
+  F32:
+    description: "Компонент блендинга 2"
+    unit: "%"
+    default_range: [10.0, 50.0]
+  F34:
+    description: "Компонент блендинга 3"
+    unit: "%"
+    default_range: [5.0, 30.0]
+
+quality_indicators:
+  sulfur:
+    description: "Массовая доля серы"
+    unit: "мг/кг (ppm)"
+    target_max: 10.0
+  d15:
+    description: "Плотность при 15°C"
+    unit: "кг/м3"
+  t50:
+    description: "Температура перегонки 50%"
+    unit: "°C"
+  t90:
+    description: "Температура перегонки 90%"
+    unit: "°C"
+  t95:
+    description: "Температура перегонки 95%"
+    unit: "°C"
+  cfpp:
+    description: "Предельная температура фильтруемости (ПТФ)"
+    unit: "°C"

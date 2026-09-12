@@ -1,0 +1,24 @@
+# Жёсткие технологические ограничения (Hard Constraints)
+# Качество и безопасность имеют наивысший приоритет над экономикой
+
+quality_hard_limits:
+  sulfur_max_mg_kg: 10.0          # Сера в товарном ДТ <= 10 мг/кг
+  d15_min_kg_m3: 820.0            # Плотность при 15°C (мин)
+  d15_max_kg_m3: 845.0            # Плотность при 15°C (макс)
+  flash_point_min_c: 55.0         # Температура вспышки >= 55 °C
+  cfpp_max_c: -5.0                # Предельная температура фильтруемости (летний/демисезонный)
+
+blending_constraints:
+  total_share_percent: 100.0      # Доли компонентов строго 100%
+  tolerance_percent: 0.1
+
+data_freshness_limits:
+  pak_max_age_min: 60.0           # Макс. возраст данных ПАК до подозрения на сбой
+  lims_max_age_hours: 48.0        # Макс. возраст анализа ЛИМС до признания устаревшим
+  response_lag_min: 30            # Минимальное запаздывание отклика качества
+  response_lag_max: 120           # Максимальное запаздывание отклика качества
+
+equipment_safety_limits:
+  avt_total_feed_min: 50.0        # Минимальный суммарный расход сырой нефти (F7+F8+F9)
+  max_reactor_temperature_c: 380.0
+  max_reactor_pressure_mpa: 4.5
