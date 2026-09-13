@@ -1,0 +1,96 @@
+# config.yaml
+
+optimizer:
+  # Управляемые параметры
+  controlled_params:
+    T6:
+      current: 295.0
+      min: 290.0
+      max: 305.0
+      unit: "°C"
+      description: "Температура реактора гидроочистки (Р-201)"
+
+    F2_F26_ratio:
+      current: 0.85
+      min: 0.80
+      max: 0.95
+      unit: "-"
+      description: "Соотношение ВСГ/сырьё"
+
+    T55:
+      current: 320.0
+      min: 315.0
+      max: 330.0
+      unit: "°C"
+      description: "Температура печи П-1/1"
+
+    F9:
+      current: 250.0
+      min: 225.0
+      max: 275.0
+      unit: "т/ч"
+      description: "Расход обессоленной нефти на гидроочистку"
+
+  # Доли блендинга
+  blending_fractions:
+    F30:
+      current: 0.30
+      min: 0.25
+      max: 0.35
+      unit: "доля"
+      description: "Доля фракции 240-290°C"
+
+    F32:
+      current: 0.25
+      min: 0.20
+      max: 0.30
+      unit: "доля"
+      description: "Доля фракции 290-350°C"
+
+    F34:
+      current: 0.20
+      min: 0.15
+      max: 0.25
+      unit: "доля"
+      description: "Доля фракции 350-500°C"
+
+    F56:
+      current: 0.10
+      min: 0.05
+      max: 0.15
+      unit: "доля"
+      description: "Доля лёгкого компонента"
+
+    F57:
+      current: 0.10
+      min: 0.05
+      max: 0.15
+      unit: "доля"
+      description: "Доля тяжёлого компонента"
+
+    F59:
+      current: 0.05
+      min: 0.02
+      max: 0.08
+      unit: "доля"
+      description: "Доля присадки"
+
+  # Веса целевой функции
+  weights:
+    throughput: 0.5
+    energy: 0.3
+    risk: 0.2
+
+  # Количество кандидатов
+  num_candidates: 50
+  num_blending_candidates: 20
+
+quality:
+  risk_threshold: 0.1  # P(S>10) > 0.1 → veto
+  max_age_min: 120  # age_min > 120 → отказ
+
+reliability:
+  risk_class_thresholds:
+    low: 0.3
+    medium: 0.6
+    high: 1.0
