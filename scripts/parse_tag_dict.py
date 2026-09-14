@@ -246,6 +246,30 @@ def build_tag_dictionary(
         df_clean = pd.read_parquet(telemetry_path)
         telemetry_stats = calculate_telemetry_stats(df_clean)
 
+    # Статистики из показателей качества (ЛИМС и ПАК)
+    quality_path = Path("data/processed/quality_long.parquet")
+    if quality_path.exists():
+        df_q = pd.read_parquet(quality_path)
+        q_grouped = df_q.groupby('tag')['value']
+        for q_tag, s in q_grouped:
+            s_clean = s.dropna()
+            if len(s_clean) >= 5:
+                m_val = float(s_clean.mean())
+                sd_val = float(s_clean.std())
+                if sd_val <= 0 or np.isnan(sd_val):
+                    sd_val = 1e-6
+                telemetry_stats[q_tag] = {
+                    'norm_mean': round(m_val, 4),
+                    'norm_std': round(sd_val, 4),
+                    'min_norm': round(float(s_clean.quantile(0.005)), 4),
+                    'max_norm': round(float(s_clean.quantile(0.995)), 4),
+                    'p01': round(float(s_clean.quantile(0.01)), 4),
+                    'p05': round(float(s_clean.quantile(0.05)), 4),
+                    'p50': round(float(s_clean.quantile(0.50)), 4),
+                    'p95': round(float(s_clean.quantile(0.95)), 4),
+                    'p99': round(float(s_clean.quantile(0.99)), 4),
+                }
+
     # Обогащаем датафрейм статистиками и флагами управления
     for metric in ['norm_mean', 'norm_std', 'min_norm', 'max_norm', 'p01', 'p05', 'p50', 'p95', 'p99']:
         df_dict[metric] = df_dict['tag'].map(lambda t: telemetry_stats.get(t, {}).get(metric, np.nan))
