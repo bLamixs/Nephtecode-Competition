@@ -253,13 +253,15 @@ class OptimizationAgent:
             Список кандидатов (каждый — Dict[фракция, доля])
         """
         # Dirichlet distribution (сумма = 1.0)
+        # Центрируем параметры Dirichlet вокруг текущего базового состава
+        alpha = np.array([param.current * 100.0 for param in self.blending_fractions.values()])
         candidates = []
+        max_attempts = num_candidates * 100
+        attempts = 0
 
-        for _ in range(num_candidates):
-            # Параметры Dirichlet (равномерное распределение)
-            alpha = np.ones(len(self.blending_fractions))
-
-            # Сэмплирование
+        while len(candidates) < num_candidates and attempts < max_attempts:
+            attempts += 1
+            # Сэмплирование вокруг базовой рецептуры
             fractions = np.random.dirichlet(alpha)
 
             # Проверка диапазонов
@@ -280,6 +282,12 @@ class OptimizationAgent:
                 total = sum(candidate.values())
                 candidate = {k: v / total for k, v in candidate.items()}
                 candidates.append(candidate)
+
+        # Если сэмплов не хватило, добавляем базовый нормативный рецепт
+        if len(candidates) == 0:
+            base_candidate = {name: param.current for name, param in self.blending_fractions.items()}
+            total = sum(base_candidate.values())
+            candidates.append({k: v / total for k, v in base_candidate.items()})
 
         return candidates
 
