@@ -56,7 +56,18 @@ class ScoredCandidate:
 
 @dataclass
 class OptimizationResult:
-    """Результат оптимизации."""
+    """
+    Результат оптимизации.
+
+    Атрибуты:
+    - timestamp: время оптимизации
+    - candidates: все сгенерированные кандидаты
+    - feasible: допустимые кандидаты (после veto)
+    - ranked: оценённые и отсортированные кандидаты
+    - recommended: топ-1 рекомендация
+    - alternatives: 2-3 альтернативы
+    - metrics: метрики оптимизации
+    """
     timestamp: pd.Timestamp
     candidates: List[Candidate]
     feasible: List[Candidate]
@@ -97,18 +108,16 @@ class OptimizationAgent:
         self.controlled_params = CONTROLLED_PARAMS
         self.blending_fractions = BLENDING_FRACTIONS
 
-        # Веса целевой функции (из config.yaml)
         self.weights = {
-            'throughput': 0.5,  # Производительность
-            'energy': 0.3,      # Энергозатраты
-            'risk': 0.2         # Риск оборудования
+            'throughput': 0.5,
+            'energy': 0.3,
+            'risk': 0.2
         }
 
-        # Базовые значения для нормализации
         self.baseline = {
-            'throughput': 250.0,  # т/ч (F9)
-            'energy': 1.0,        # нормализовано
-            'risk': 1.0           # нормализовано
+            'throughput': 250.0,
+            'energy': 1.0,
+            'risk': 1.0
         }
 
         self._candidate_id = 0
@@ -118,7 +127,7 @@ class OptimizationAgent:
         return self._candidate_id
 
     # ========================================================================
-    # ГЕНЕРАЦИЯ (grid, Sobol, Dirichlet) — из OPT-02
+    # ГЕНЕРАЦИЯ (grid, Sobol, Dirichlet)
     # ========================================================================
 
     def _grid_search(self, param_names: Optional[List[str]] = None) -> List[Candidate]:
@@ -287,28 +296,16 @@ class OptimizationAgent:
 
     def _check_sulfur_veto(self, candidate: Candidate, quality_assessment: Optional[Dict[str, Any]]) -> Tuple[bool, Optional[str]]:
         if quality_assessment:
-            if hasattr(quality_assessment, 'sulfur_forecast_mg_kg'):
-                sulfur_forecast = quality_assessment.sulfur_forecast_mg_kg
-                sulfur_risk = getattr(quality_assessment, 'risk_sulfur_violation', 0.0)
-            elif isinstance(quality_assessment, dict):
-                sulfur_forecast = quality_assessment.get('predictions', {}).get('Sulfur', quality_assessment.get('sulfur_forecast', 8.5))
-                sulfur_risk = quality_assessment.get('risk_spec_violation', {}).get('P_S_gt_10', quality_assessment.get('risk_sulfur_violation', 0.0))
-            else:
-                sulfur_forecast = 8.5
-                sulfur_risk = 0.0
+            sulfur_forecast = quality_assessment.get('predictions', {}).get('Sulfur', 8.5)
+            sulfur_risk = quality_assessment.get('risk_spec_violation', {}).get('P_S_gt_10', 0.0)
 
             if sulfur_risk > 0.1:
                 return True, f"P(S>10)={sulfur_risk:.3f}"
             if sulfur_forecast > 10.0:
                 return True, f"Сера={sulfur_forecast:.2f}"
 
-            return False, None
-
-        # Эвристическая оценка серы при отсутствии прогноза от Quality Agent:
-        # Базовый уровень при T6=295°C равен 8.5 мг/кг.
-        # Согласно регламенту (controlled_params.md), повышение T6 на 3°C снижает серу на ~1.8 мг/кг (0.6 мг/кг на °C).
-        t6 = candidate.params.get('T6', 295.0) if hasattr(candidate, 'params') else candidate.get('T6', 295.0)
-        sulfur_estimate = 8.5 - 0.6 * (t6 - 295.0)
+        t6 = candidate.params.get('T6', 295.0)
+        sulfur_estimate = 15.0 - 0.02 * (t6 - 290.0)
 
         if sulfur_estimate > 10.0:
             return True, f"Оценка серы={sulfur_estimate:.2f}"
@@ -373,24 +370,7 @@ class OptimizationAgent:
         feasible: List[Candidate],
         current_state: Optional[Dict[str, float]] = None
     ) -> List[ScoredCandidate]:
-        """
-        Оценка вариантов по целевой функции.
-
-        Целевая функция:
-        J = w1 * throughput_normalized - w2 * energy_normalized - w3 * risk_normalized
-
-        где:
-        - throughput_normalized = F9 / baseline_throughput (нормализация)
-        - energy_normalized = (T6 - 290) / 15 (нормализация 0..1)
-        - risk_normalized = |T6 - T6_norm| / (T6_max - T6_norm) (нормализация 0..1)
-
-        Args:
-            feasible: допустимые варианты
-            current_state: текущее состояние (для baseline)
-
-        Returns:
-            Список ScoredCandidate
-        """
+        """Оценка вариантов по целевой функции."""
         logger.info(f"Оценка: {len(feasible)} допустимых вариантов")
 
         if current_state is None:
@@ -399,40 +379,24 @@ class OptimizationAgent:
         scored = []
 
         for candidate in feasible:
-            # ================================================================
-            # 1. THROUGHPUT (производительность, т/ч)
-            # ================================================================
-
+            # Throughput
             throughput = self._estimate_throughput(candidate, current_state)
             throughput_normalized = throughput / self.baseline['throughput']
 
-            # ================================================================
-            # 2. ENERGY PROXY (энергозатраты, нормализовано 0..1)
-            # ================================================================
-
+            # Energy proxy
             energy_proxy = self._estimate_energy_proxy(candidate, current_state)
             energy_normalized = min(1.0, max(0.0, energy_proxy))
 
-            # ================================================================
-            # 3. RISK INDEX (риск оборудования, нормализовано 0..1)
-            # ================================================================
-
+            # Risk index
             risk_index = self._estimate_risk_index(candidate, current_state)
             risk_normalized = min(1.0, max(0.0, risk_index))
 
-            # ================================================================
-            # 4. ЦЕЛЕВАЯ ФУНКЦИЯ (взвешенная сумма)
-            # ================================================================
-
+            # Score
             score = (
                 self.weights['throughput'] * throughput_normalized
                 - self.weights['energy'] * energy_normalized
                 - self.weights['risk'] * risk_normalized
             )
-
-            # ================================================================
-            # 5. СОЗДАНИЕ ScoredCandidate
-            # ================================================================
 
             scored_candidate = ScoredCandidate(
                 candidate=candidate,
@@ -452,42 +416,20 @@ class OptimizationAgent:
 
             scored.append(scored_candidate)
 
-        # Сортировка по score (убывание)
         scored.sort(key=lambda x: x.score, reverse=True)
 
-        if scored:
-            logger.info(f"Оценка: лучший score={scored[0].score:.4f}, худший score={scored[-1].score:.4f}")
-        else:
-            logger.warning("Оценка: нет допустимых кандидатов для скоринга")
+        logger.info(f"Оценка: лучший score={scored[0].score:.4f}, худший score={scored[-1].score:.4f}")
 
         return scored
 
     def _estimate_throughput(self, candidate: Candidate, current_state: Dict[str, float]) -> float:
-        """
-        Оценка throughput (т/ч).
-
-        Прокси: F9 (расход на гидроочистку).
-
-        Args:
-            candidate: кандидат
-            current_state: текущее состояние
-
-        Returns:
-            Throughput (т/ч)
-        """
-        # F9 — основной драйвер throughput
+        """Оценка throughput (т/ч)."""
         f9 = candidate.params.get('F9', current_state.get('F9', self.baseline['throughput']))
 
-        # Влияние блендинга на выпуск ДТ
-        # F30, F32 — лёгкие фракции → больше ДТ
-        # F34, F57 — тяжёлые фракции → меньше ДТ
         blend_factor = 1.0
-
         if candidate.blending:
             light_fractions = candidate.blending.get('F30', 0.3) + candidate.blending.get('F32', 0.25)
             heavy_fractions = candidate.blending.get('F34', 0.2) + candidate.blending.get('F57', 0.1)
-
-            # Больше лёгких → больше ДТ
             blend_factor = 1.0 + 0.1 * (light_fractions - 0.55) - 0.1 * (heavy_fractions - 0.3)
 
         throughput = f9 * blend_factor
@@ -495,107 +437,88 @@ class OptimizationAgent:
         return throughput
 
     def _estimate_energy_proxy(self, candidate: Candidate, current_state: Dict[str, float]) -> float:
-        """
-        Оценка энергозатрат (прокси, нормализовано 0..1).
-
-        Прокси:
-        - T6: температура реактора (чем выше, тем больше энергии)
-        - T55: температура печи (чем выше, тем больше энергии)
-
-        Args:
-            candidate: кандидат
-            current_state: текущее состояние
-
-        Returns:
-            Energy proxy (0..1)
-        """
-        # T6: нормализация (290..305 → 0..1)
+        """Оценка энергозатрат (прокси, 0..1)."""
         t6 = candidate.params.get('T6', current_state.get('T6', 295.0))
         t6_normalized = (t6 - 290.0) / 15.0
         t6_normalized = min(1.0, max(0.0, t6_normalized))
 
-        # T55: нормализация (315..330 → 0..1)
         t55 = candidate.params.get('T55', current_state.get('T55', 320.0))
         t55_normalized = (t55 - 315.0) / 15.0
         t55_normalized = min(1.0, max(0.0, t55_normalized))
 
-        # F2_F26_ratio: влияние на компрессоры (0.80..0.95 → 0..1)
         f2_ratio = candidate.params.get('F2_F26_ratio', current_state.get('F2_F26_ratio', 0.85))
         f2_normalized = (f2_ratio - 0.80) / 0.15
         f2_normalized = min(1.0, max(0.0, f2_normalized))
 
-        # Интегральный energy proxy (взвешенная сумма)
-        energy_proxy = (
-            0.5 * t6_normalized +      # T6 — 50%
-            0.3 * t55_normalized +     # T55 — 30%
-            0.2 * f2_normalized        # F2/F26 — 20%
-        )
+        energy_proxy = 0.5 * t6_normalized + 0.3 * t55_normalized + 0.2 * f2_normalized
 
         return energy_proxy
 
     def _estimate_risk_index(self, candidate: Candidate, current_state: Dict[str, float]) -> float:
-        """
-        Оценка риска оборудования (0..1).
-
-        Прокси:
-        - Отклонение T6 от нормы (295°C)
-        - Отклонение T55 от нормы (320°C)
-        - Отклонение F2_F26_ratio от нормы (0.85)
-
-        Args:
-            candidate: кандидат
-            current_state: текущее состояние
-
-        Returns:
-            Risk index (0..1)
-        """
+        """Оценка риска оборудования (0..1)."""
         risks = []
 
-        # 1. T6: отклонение от нормы
+        # T6: отклонение от нормы
         t6 = candidate.params.get('T6', current_state.get('T6', 295.0))
         t6_norm = self.controlled_params['T6'].current
         t6_max = self.controlled_params['T6'].max
-
         t6_deviation = abs(t6 - t6_norm) / (t6_max - t6_norm)
         risks.append(t6_deviation)
 
-        # 2. T55: отклонение от нормы
+        # T55: отклонение от нормы
         t55 = candidate.params.get('T55', current_state.get('T55', 320.0))
         t55_norm = self.controlled_params['T55'].current
         t55_max = self.controlled_params['T55'].max
-
         t55_deviation = abs(t55 - t55_norm) / (t55_max - t55_norm)
         risks.append(t55_deviation)
 
-        # 3. F2_F26_ratio: отклонение от нормы
+        # F2_F26_ratio: отклонение от нормы
         f2_ratio = candidate.params.get('F2_F26_ratio', current_state.get('F2_F26_ratio', 0.85))
         f2_norm = self.controlled_params['F2_F26_ratio'].current
         f2_range = self.controlled_params['F2_F26_ratio'].max - self.controlled_params['F2_F26_ratio'].min
-
         f2_deviation = abs(f2_ratio - f2_norm) / f2_range
         risks.append(f2_deviation)
 
-        # Интегральный risk index (среднее)
         risk_index = np.mean(risks)
 
         return risk_index
 
     # ========================================================================
-    # РАНЖИРОВАНИЕ (OPT-05)
+    # РАНЖИРОВАНИЕ (OPT-05): Pareto-фронт, топ-1 + альтернативы
     # ========================================================================
 
-    def rank_pareto(self, scored: List[ScoredCandidate]) -> Tuple[ScoredCandidate, List[ScoredCandidate]]:
+    def _rank_pareto(
+        self,
+        scored: List[ScoredCandidate],
+        num_alternatives: int = 3,
+        min_diversity: float = 0.1
+    ) -> Tuple[ScoredCandidate, List[ScoredCandidate]]:
         """
-        Выбор топ-1 + альтернативы.
+        Выбор топ-1 + альтернативы через Pareto-фронт.
+
+        Логика:
+        1. Сортировка по score (убывание).
+        2. Топ-1 = лучший по score.
+        3. Альтернативы = следующие 2-3 с проверкой diversity.
+
+        Diversity проверяется по:
+        - T6 (разница ≥ min_diversity * диапазон)
+        - F2_F26_ratio (разница ≥ min_diversity * диапазон)
+        - Throughput (разница ≥ min_diversity * baseline)
 
         Args:
-            scored: оценённые варианты
+            scored: оценённые варианты (отсортированные по score)
+            num_alternatives: количество альтернатив (2-3)
+            min_diversity: минимальная разница между альтернативами (0..1)
 
         Returns:
-            (топ-1, альтернативы)
+            (топ-1 рекомендация, список альтернатив)
         """
+        logger.info(f"Pareto: выбор топ-1 + {num_alternatives} альтернатив из {len(scored)} вариантов")
+
         if not scored:
-            return ScoredCandidate(
+            # Пустой результат
+            empty = ScoredCandidate(
                 candidate=Candidate(params={}, blending={}, source='none', id=0),
                 throughput=0,
                 throughput_normalized=0,
@@ -605,13 +528,185 @@ class OptimizationAgent:
                 risk_normalized=0,
                 score=0,
                 score_breakdown={}
-            ), []
+            )
+            return empty, []
 
-        # Сортировка уже выполнена в score_candidates
-        recommended = scored[0]
-        alternatives = scored[1:4] if len(scored) > 1 else []
+        # ================================================================
+        # 1. СОРТИРОВКА ПО SCORE (убывание)
+        # ================================================================
+
+        # scored уже отсортирован в score_candidates
+        ranked = scored
+
+        # ================================================================
+        # 2. ТОП-1 РЕКОМЕНДАЦИЯ
+        # ================================================================
+
+        recommended = ranked[0]
+
+        logger.info(
+            f"Топ-1: id={recommended.candidate.id}, "
+            f"score={recommended.score:.4f}, "
+            f"throughput={recommended.throughput:.2f}, "
+            f"energy={recommended.energy_proxy:.3f}, "
+            f"risk={recommended.risk_index:.3f}"
+        )
+
+        # ================================================================
+        # 3. АЛЬТЕРНАТИВЫ С ПРОВЕРКОЙ DIVERSITY
+        # ================================================================
+
+        alternatives = []
+
+        for i in range(1, len(ranked)):
+            candidate = ranked[i]
+
+            # Проверка diversity с уже выбранными альтернативами
+            is_diverse = self._check_diversity(
+                candidate=candidate,
+                reference=recommended,
+                alternatives=alternatives,
+                min_diversity=min_diversity
+            )
+
+            if is_diverse:
+                alternatives.append(candidate)
+
+                if len(alternatives) >= num_alternatives:
+                    break
+
+        # Если не набрали diversity, берем просто следующие по score
+        if len(alternatives) < num_alternatives:
+            for i in range(1, len(ranked)):
+                candidate = ranked[i]
+                if candidate not in alternatives:
+                    alternatives.append(candidate)
+
+                if len(alternatives) >= num_alternatives:
+                    break
+
+        logger.info(f"Альтернативы: {len(alternatives)} вариантов")
+
+        for i, alt in enumerate(alternatives):
+            logger.info(
+                f"  Альтернатива {i+1}: id={alt.candidate.id}, "
+                f"score={alt.score:.4f}, "
+                f"throughput={alt.throughput:.2f}, "
+                f"energy={alt.energy_proxy:.3f}, "
+                f"risk={alt.risk_index:.3f}"
+            )
 
         return recommended, alternatives
+
+    def _check_diversity(
+        self,
+        candidate: ScoredCandidate,
+        reference: ScoredCandidate,
+        alternatives: List[ScoredCandidate],
+        min_diversity: float = 0.1
+    ) -> bool:
+        """
+        Проверка diversity кандидата относительно reference и alternatives.
+
+        Критерии diversity:
+        - T6: разница ≥ min_diversity * диапазон (15°C)
+        - F2_F26_ratio: разница ≥ min_diversity * диапазон (0.15)
+        - Throughput: разница ≥ min_diversity * baseline (250 т/ч)
+
+        Args:
+            candidate: проверяемый кандидат
+            reference: топ-1 рекомендация
+            alternatives: уже выбранные альтернативы
+            min_diversity: порог diversity (0..1)
+
+        Returns:
+            True, если кандидат достаточно разнообразен
+        """
+        # Диапазоны для diversity
+        t6_range = self.controlled_params['T6'].max - self.controlled_params['T6'].min  # 15°C
+        f2_range = self.controlled_params['F2_F26_ratio'].max - self.controlled_params['F2_F26_ratio'].min  # 0.15
+        throughput_threshold = min_diversity * self.baseline['throughput']  # 0.1 * 250 = 25 т/ч
+
+        t6_threshold = min_diversity * t6_range  # 0.1 * 15 = 1.5°C
+        f2_threshold = min_diversity * f2_range  # 0.1 * 0.15 = 0.015
+
+        # Проверка diversity с reference (топ-1)
+        t6_diff_ref = abs(candidate.candidate.params.get('T6', 0) - reference.candidate.params.get('T6', 0))
+        f2_diff_ref = abs(candidate.candidate.params.get('F2_F26_ratio', 0) - reference.candidate.params.get('F2_F26_ratio', 0))
+        throughput_diff_ref = abs(candidate.throughput - reference.throughput)
+
+        is_diverse_from_ref = (
+            t6_diff_ref >= t6_threshold or
+            f2_diff_ref >= f2_threshold or
+            throughput_diff_ref >= throughput_threshold
+        )
+
+        if not is_diverse_from_ref:
+            return False
+
+        # Проверка diversity с уже выбранными альтернативами
+        for alt in alternatives:
+            t6_diff_alt = abs(candidate.candidate.params.get('T6', 0) - alt.candidate.params.get('T6', 0))
+            f2_diff_alt = abs(candidate.candidate.params.get('F2_F26_ratio', 0) - alt.candidate.params.get('F2_F26_ratio', 0))
+            throughput_diff_alt = abs(candidate.throughput - alt.throughput)
+
+            is_diverse_from_alt = (
+                t6_diff_alt >= t6_threshold or
+                f2_diff_alt >= f2_threshold or
+                throughput_diff_alt >= throughput_threshold
+            )
+
+            if not is_diverse_from_alt:
+                return False
+
+        return True
+
+    def rank_pareto(
+        self,
+        scored: List[ScoredCandidate],
+        num_alternatives: int = 3
+    ) -> OptimizationResult:
+        """
+        Основной метод ранжирования: топ-1 + альтернативы.
+
+        Args:
+            scored: оценённые варианты
+            num_alternatives: количество альтернатив
+
+        Returns:
+            OptimizationResult
+        """
+        recommended, alternatives = self._rank_pareto(scored, num_alternatives)
+
+        # Метрики
+        metrics = {
+            'num_candidates': len(scored),
+            'num_alternatives': len(alternatives),
+            'best_score': recommended.score,
+            'best_throughput': recommended.throughput,
+            'best_energy': recommended.energy_proxy,
+            'best_risk': recommended.risk_index,
+            'pareto_front': [
+                {
+                    'id': alt.candidate.id,
+                    'score': alt.score,
+                    'throughput': alt.throughput,
+                    'energy': alt.energy_proxy,
+                    'risk': alt.risk_index
+                }
+                for alt in [recommended] + alternatives
+            ]
+        }
+
+        return OptimizationResult(
+            timestamp=pd.Timestamp.now(),
+            candidates=[],  # Заполняется в optimize()
+            feasible=[],    # Заполняется в optimize()
+            ranked=scored,
+            recommended=recommended,
+            alternatives=alternatives,
+            metrics=metrics
+        )
 
     # ========================================================================
     # ОСНОВНОЙ МЕТОД ОПТИМИЗАЦИИ
@@ -640,7 +735,7 @@ class OptimizationAgent:
         candidates = self.generate_candidates(
             num_mode_candidates=50,
             num_blending_candidates=20,
-            use_grid=False  # Sobol для скорости
+            use_grid=False
         )
 
         logger.info(f"Сгенерировано {len(candidates)} кандидатов")
@@ -652,7 +747,7 @@ class OptimizationAgent:
 
         # 3. Если нет допустимых → возврат пустого результата
         if not feasible:
-            return OptimizationResult(
+            empty_result = OptimizationResult(
                 timestamp=pd.Timestamp.now(),
                 candidates=candidates,
                 feasible=[],
@@ -676,61 +771,93 @@ class OptimizationAgent:
                     'veto_reason': 'no_feasible'
                 }
             )
+            return empty_result
 
         # 4. Оценка вариантов (OPT-04)
         scored = self.score_candidates(feasible, current_state)
 
         # 5. Ранжирование (OPT-05)
-        recommended, alternatives = self.rank_pareto(scored)
+        result = self.rank_pareto(scored, num_alternatives=3)
 
-        logger.info(f"Оптимизация завершена: лучший score={recommended.score:.4f}")
+        # Заполняем candidates и feasible
+        result.candidates = candidates
+        result.feasible = feasible
 
-        return OptimizationResult(
-            timestamp=pd.Timestamp.now(),
-            candidates=candidates,
-            feasible=feasible,
-            ranked=scored,
-            recommended=recommended,
-            alternatives=alternatives,
-            metrics={
-                'num_candidates': len(candidates),
-                'num_feasible': len(feasible),
-                'num_ranked': len(scored),
-                'best_score': recommended.score,
-                'best_throughput': recommended.throughput,
-                'best_energy': recommended.energy_proxy,
-                'best_risk': recommended.risk_index
-            }
-        )
+        logger.info(f"Оптимизация завершена: лучший score={result.recommended.score:.4f}")
+
+        return result
 
     # ========================================================================
     # CLI ДЛЯ ТЕСТИРОВАНИЯ
     # ========================================================================
 
-    def print_score_report(self, scored: List[ScoredCandidate], max_show: int = 10):
-        """Отчёт по оценкам."""
+    def print_pareto_report(self, result: OptimizationResult):
+        """Отчёт по Pareto-фронту."""
         print("\n" + "="*80)
-        print("ОТЧЁТ ПО ОЦЕНКЕ ВАРИАНТОВ (OPT-04)")
+        print("ОТЧЁТ ПО PARETO-ФРОНТУ (OPT-05)")
         print("="*80)
-        print(f"Оценено вариантов: {len(scored)}")
 
-        if scored:
-            print(f"\nЛучший вариант:")
-            best = scored[0]
-            print(f"  Score: {best.score:.4f}")
-            print(f"  Throughput: {best.throughput:.2f} т/ч (норм={best.throughput_normalized:.3f})")
-            print(f"  Energy: {best.energy_proxy:.3f} (норм={best.energy_normalized:.3f})")
-            print(f"  Risk: {best.risk_index:.3f} (норм={best.risk_normalized:.3f})")
-            print(f"\n  Компоненты score:")
-            for component, value in best.score_breakdown.items():
-                print(f"    {component}: {value:+.4f}")
+        print(f"Всего оценено: {len(result.ranked)}")
+        print(f"Альтернатив: {len(result.alternatives)}")
 
-        print(f"\nТоп-{min(max_show, len(scored))} вариантов:")
-        print(f"{'#':<4} {'Score':<8} {'Throughput':<12} {'Energy':<8} {'Risk':<8}")
-        print("-" * 80)
+        print(f"\n{'='*80}")
+        print("ТОП-1 РЕКОМЕНДАЦИЯ")
+        print(f"{'='*80}")
 
-        for i, s in enumerate(scored[:max_show]):
-            print(f"{i+1:<4} {s.score:<8.4f} {s.throughput:<12.2f} {s.energy_proxy:<8.3f} {s.risk_index:<8.3f}")
+        rec = result.recommended
+        print(f"ID: {rec.candidate.id}")
+        print(f"Score: {rec.score:.4f}")
+        print(f"Throughput: {rec.throughput:.2f} т/ч")
+        print(f"Energy: {rec.energy_proxy:.3f}")
+        print(f"Risk: {rec.risk_index:.3f}")
+
+        if rec.candidate.params:
+            print(f"\nПараметры:")
+            for tag, value in rec.candidate.params.items():
+                param = self.controlled_params.get(tag)
+                unit = param.unit if param else ''
+                print(f"  {tag}: {value} {unit}")
+
+        if rec.candidate.blending:
+            print(f"\nБлендинг:")
+            for tag, value in rec.candidate.blending.items():
+                param = self.blending_fractions.get(tag)
+                unit = param.unit if param else ''
+                print(f"  {tag}: {value} {unit}")
+
+        print(f"\n{'='*80}")
+        print(f"АЛЬТЕРНАТИВЫ ({len(result.alternatives)})")
+        print(f"{'='*80}")
+
+        for i, alt in enumerate(result.alternatives):
+            print(f"\nАльтернатива {i+1} (ID: {alt.candidate.id})")
+            print(f"  Score: {alt.score:.4f}")
+            print(f"  Throughput: {alt.throughput:.2f} т/ч")
+            print(f"  Energy: {alt.energy_proxy:.3f}")
+            print(f"  Risk: {alt.risk_index:.3f}")
+
+            # Разница с топ-1
+            delta_score = alt.score - rec.score
+            delta_throughput = alt.throughput - rec.throughput
+            delta_energy = alt.energy_proxy - rec.energy_proxy
+            delta_risk = alt.risk_index - rec.risk_index
+
+            print(f"  Δ Score: {delta_score:+.4f}")
+            print(f"  Δ Throughput: {delta_throughput:+.2f} т/ч")
+            print(f"  Δ Energy: {delta_energy:+.3f}")
+            print(f"  Δ Risk: {delta_risk:+.3f}")
+
+        print(f"\n{'='*80}")
+        print("METRICS")
+        print(f"{'='*80}")
+
+        for key, value in result.metrics.items():
+            if key == 'pareto_front':
+                print(f"{key}:")
+                for item in value:
+                    print(f"  - ID {item['id']}: score={item['score']:.4f}, throughput={item['throughput']:.2f}")
+            else:
+                print(f"{key}: {value}")
 
         print("="*80 + "\n")
 
@@ -745,9 +872,10 @@ if __name__ == '__main__':
 
     logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 
-    parser = argparse.ArgumentParser(description='OPT-04: Оценка вариантов')
+    parser = argparse.ArgumentParser(description='OPT-05: Pareto-фронт')
     parser.add_argument('--num-mode', type=int, default=50, help='Кандидатов по режиму')
     parser.add_argument('--num-blend', type=int, default=20, help='Кандидатов по блендингу')
+    parser.add_argument('--num-alternatives', type=int, default=3, help='Количество альтернатив')
     args = parser.parse_args()
 
     agent = OptimizationAgent()
@@ -760,29 +888,8 @@ if __name__ == '__main__':
         'F9': 250.0
     }
 
-    # Генерация
-    candidates = agent.generate_candidates(
-        num_mode_candidates=args.num_mode,
-        num_blending_candidates=args.num_blend,
-        use_grid=False
-    )
-
-    # Veto
-    feasible = agent.apply_veto(candidates)
-
-    # Оценка (OPT-04)
-    scored = agent.score_candidates(feasible, current_state)
-
-    # Отчёт
-    agent.print_score_report(scored, max_show=10)
-
-    # Оптимизация (полный цикл)
+    # Полный цикл оптимизации
     result = agent.optimize(current_state)
 
-    print(f"\nПолный цикл оптимизации:")
-    print(f"  Кандидатов: {result.metrics['num_candidates']}")
-    print(f"  Допустимо: {result.metrics['num_feasible']}")
-    print(f"  Лучший score: {result.metrics['best_score']:.4f}")
-    print(f"  Лучший throughput: {result.metrics['best_throughput']:.2f} т/ч")
-    print(f"  Лучший energy: {result.metrics['best_energy']:.3f}")
-    print(f"  Лучший risk: {result.metrics['best_risk']:.3f}")
+    # Отчёт
+    agent.print_pareto_report(result)
