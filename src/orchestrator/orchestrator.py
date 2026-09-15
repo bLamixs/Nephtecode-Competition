@@ -6,11 +6,13 @@ import logging
 from datetime import datetime
 from typing import Dict, Any, Optional
 import asyncio
+import pandas as pd
 
 from src.agents.quality_agent import QualityAgent
 from src.agents.reliability_agent import ReliabilityAgent
 from src.agents.optimization_agent import OptimizationAgent
 from src.orchestrator.conflict_resolver import ConflictResolver, ConflictResolution
+from src.orchestrator.input_validator import InputValidator, ValidationResult
 from src.orchestrator.recommendation import Recommendation
 
 logger = logging.getLogger(__name__)
@@ -35,6 +37,13 @@ class Orchestrator:
         self.reliability_agent = ReliabilityAgent()
         self.optimization_agent = OptimizationAgent()
 
+        # Валидатор входа
+        self.input_validator = InputValidator(
+            max_missing_ratio=0.3,
+            max_age_min=120,
+            consistency_threshold=0.2
+        )
+
         # Разрешение конфликтов
         self.conflict_resolver = ConflictResolver(
             quality_risk_threshold=0.1,
@@ -44,10 +53,10 @@ class Orchestrator:
         logger.info("Orchestrator инициализирован")
 
     async def run_cycle(
-            self,
-            telemetry: Dict[str, Any],
-            quality_data: Dict[str, Any],
-            scenario: str = 'normal'
+        self,
+        telemetry: pd.DataFrame,
+        quality_data: pd.DataFrame,
+        scenario: str = 'normal'
     ) -> Recommendation:
         """
         Один цикл принятия решения.
@@ -63,16 +72,21 @@ class Orchestrator:
         logger.info(f"Запуск цикла: scenario={scenario}")
 
         # ====================================================================
-        # ШАГ 1: ПРОВЕРКА ВХОДА
+        # ШАГ 1: ПРОВЕРКА ВХОДА (ORCH-01)
         # ====================================================================
 
         logger.info("Шаг 1: Проверка входа")
 
-        input_valid, input_reason = self._validate_input(telemetry, quality_data)
+        validation_result = self.input_validator.validate(telemetry, quality_data)
 
-        if not input_valid:
-            logger.warning(f"Вход не валиден: {input_reason}")
-            return self._no_recommendation(f"Недостаточно данных: {input_reason}")
+        if not validation_result.is_valid:
+            logger.warning(f"Вход не валиден: {validation_result.reasons}")
+            return self._no_recommendation(
+                f"Недостаточно данных: {'; '.join(validation_result.reasons)}"
+            )
+
+        if validation_result.warnings:
+            logger.warning(f"Предупреждения: {validation_result.warnings}")
 
         # ====================================================================
         # ШАГ 2: ЗАПРОС АГЕНТОВ
@@ -129,7 +143,8 @@ class Orchestrator:
             quality_assessment=quality_assessment,
             reliability_assessment=reliability_assessment,
             optimization_result=optimization_result,
-            conflict_resolution=conflict_resolution
+            conflict_resolution=conflict_resolution,
+            validation_result=validation_result
         )
 
         logger.info(f"Рекомендация: {recommendation.status}")
@@ -138,61 +153,60 @@ class Orchestrator:
         return recommendation
 
     def _validate_input(
-            self,
-            telemetry: Dict[str, Any],
-            quality_data: Dict[str, Any]
-    ) -> tuple[bool, str]:
+        self,
+        telemetry: pd.DataFrame,
+        quality_data: pd.DataFrame
+    ) -> ValidationResult:
         """
         Проверка входных данных.
 
         Returns:
-            (валидно, причина)
+            ValidationResult
         """
-        # 1. Полнота (пропуски < 30%)
-        # TODO: реализовать
-
-        # 2. Актуальность (age_min < 120)
-        # TODO: реализовать
-
-        # 3. Согласованность (ЛИМС/ПАК не противоречат)
-        # TODO: реализовать
-
-        return True, "OK"
+        return self.input_validator.validate(telemetry, quality_data)
 
     async def _call_quality_agent(
-            self,
-            telemetry: Dict[str, Any],
-            quality_data: Dict[str, Any]
+        self,
+        telemetry: pd.DataFrame,
+        quality_data: pd.DataFrame
     ):
         """Вызов Quality Agent."""
         return await self.quality_agent.assess(telemetry, quality_data)
 
     async def _call_reliability_agent(
-            self,
-            telemetry: Dict[str, Any]
+        self,
+        telemetry: pd.DataFrame
     ):
         """Вызов Reliability Agent."""
         return await self.reliability_agent.assess(telemetry)
 
     async def _call_optimization_agent(
-            self,
-            telemetry: Dict[str, Any],
-            quality_assessment: Any,
-            reliability_assessment: Any
+        self,
+        telemetry: pd.DataFrame,
+        quality_assessment: Any,
+        reliability_assessment: Any
     ):
         """Вызов Optimization Agent."""
+        current_state = {
+            'T6': telemetry['T6'].iloc[-1] if 'T6' in telemetry else 295.0,
+            'F2_F26_ratio': telemetry['F2_F26_ratio'].iloc[-1] if 'F2_F26_ratio' in telemetry else 0.85,
+            'T55': telemetry['T55'].iloc[-1] if 'T55' in telemetry else 320.0,
+            'F9': telemetry['F9'].iloc[-1] if 'F9' in telemetry else 250.0,
+        }
+
         return await self.optimization_agent.optimize(
-            current_state=telemetry,
+            current_state=current_state,
             quality_assessment=quality_assessment,
             reliability_assessment=reliability_assessment
         )
 
     def _build_recommendation(
-            self,
-            quality_assessment: Any,
-            reliability_assessment: Any,
-            optimization_result: Any,
-            conflict_resolution: ConflictResolution
+        self,
+        quality_assessment: Any,
+        reliability_assessment: Any,
+        optimization_result: Any,
+        conflict_resolution: ConflictResolution,
+        validation_result: ValidationResult
     ) -> Recommendation:
         """
         Формирование рекомендации.
@@ -202,6 +216,7 @@ class Orchestrator:
             reliability_assessment: оценка надёжности
             optimization_result: результат оптимизации
             conflict_resolution: разрешение конфликтов
+            validation_result: проверка входа
 
         Returns:
             Recommendation
@@ -211,13 +226,19 @@ class Orchestrator:
         return Recommendation(
             recommendation_id=f"rec_{datetime.now():%Y%m%d_%H%M%S}",
             timestamp=datetime.now().isoformat(),
-            state={},  # TODO: текущее состояние
+            state={
+                'validation': {
+                    'is_valid': validation_result.is_valid,
+                    'checks': validation_result.checks,
+                    'warnings': validation_result.warnings
+                }
+            },
             problem_type="OPTIMIZATION",
-            action=recommended.get('params', {}) if recommended else {},
+            action=recommended.candidate.params if recommended else {},
             expected_effect={
-                'throughput': recommended.get('throughput', 0) if recommended else 0,
-                'energy_proxy': recommended.get('energy_proxy', 0) if recommended else 0,
-                'risk_index': recommended.get('risk_index', 0) if recommended else 0
+                'throughput': recommended.throughput if recommended else 0,
+                'energy_proxy': recommended.energy_proxy if recommended else 0,
+                'risk_index': recommended.risk_index if recommended else 0
             },
             constraints_checked=conflict_resolution.checked_constraints,
             confidence=quality_assessment.confidence,
@@ -258,26 +279,36 @@ class Orchestrator:
 if __name__ == '__main__':
     import asyncio
     import logging
+    import pandas as pd
+    import numpy as np
 
-    logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-    )
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 
     orchestrator = Orchestrator()
 
     # Моки данных
-    telemetry = {'T6': 295.0, 'F26': 100.0}
-    quality_data = {'Sulfur': 9.2, 'age_min': 45}
+    telemetry = pd.DataFrame({
+        'T6': np.random.normal(295, 2, 100),
+        'F9': np.random.normal(250, 10, 100),
+        'F2_F26_ratio': np.random.normal(0.85, 0.02, 100),
+    })
+
+    quality_data = pd.DataFrame({
+        'tag': ['Sulfur', 'D15'],
+        'value': [8.5, 835.0],
+        'source': ['LIMS', 'PAK'],
+        'age_min': [45, 30],
+        'timestamp': pd.date_range('2026-01-01', periods=2, freq='1h')
+    })
 
     # Запуск цикла
     recommendation = asyncio.run(
         orchestrator.run_cycle(telemetry, quality_data, scenario='normal')
     )
 
-    print("\n" + "=" * 80)
+    print("\n" + "="*80)
     print("Рекомендация")
-    print("=" * 80)
+    print("="*80)
     print(f"Статус: {recommendation.status}")
     print(f"Объяснение: {recommendation.explanation}")
     print(f"Действие: {recommendation.action}")
