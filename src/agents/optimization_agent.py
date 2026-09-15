@@ -287,16 +287,28 @@ class OptimizationAgent:
 
     def _check_sulfur_veto(self, candidate: Candidate, quality_assessment: Optional[Dict[str, Any]]) -> Tuple[bool, Optional[str]]:
         if quality_assessment:
-            sulfur_forecast = quality_assessment.get('predictions', {}).get('Sulfur', 8.5)
-            sulfur_risk = quality_assessment.get('risk_spec_violation', {}).get('P_S_gt_10', 0.0)
+            if hasattr(quality_assessment, 'sulfur_forecast_mg_kg'):
+                sulfur_forecast = quality_assessment.sulfur_forecast_mg_kg
+                sulfur_risk = getattr(quality_assessment, 'risk_sulfur_violation', 0.0)
+            elif isinstance(quality_assessment, dict):
+                sulfur_forecast = quality_assessment.get('predictions', {}).get('Sulfur', quality_assessment.get('sulfur_forecast', 8.5))
+                sulfur_risk = quality_assessment.get('risk_spec_violation', {}).get('P_S_gt_10', quality_assessment.get('risk_sulfur_violation', 0.0))
+            else:
+                sulfur_forecast = 8.5
+                sulfur_risk = 0.0
 
             if sulfur_risk > 0.1:
                 return True, f"P(S>10)={sulfur_risk:.3f}"
             if sulfur_forecast > 10.0:
                 return True, f"Сера={sulfur_forecast:.2f}"
 
-        t6 = candidate.params.get('T6', 295.0)
-        sulfur_estimate = 15.0 - 0.02 * (t6 - 290.0)
+            return False, None
+
+        # Эвристическая оценка серы при отсутствии прогноза от Quality Agent:
+        # Базовый уровень при T6=295°C равен 8.5 мг/кг.
+        # Согласно регламенту (controlled_params.md), повышение T6 на 3°C снижает серу на ~1.8 мг/кг (0.6 мг/кг на °C).
+        t6 = candidate.params.get('T6', 295.0) if hasattr(candidate, 'params') else candidate.get('T6', 295.0)
+        sulfur_estimate = 8.5 - 0.6 * (t6 - 295.0)
 
         if sulfur_estimate > 10.0:
             return True, f"Оценка серы={sulfur_estimate:.2f}"
@@ -443,7 +455,10 @@ class OptimizationAgent:
         # Сортировка по score (убывание)
         scored.sort(key=lambda x: x.score, reverse=True)
 
-        logger.info(f"Оценка: лучший score={scored[0].score:.4f}, худший score={scored[-1].score:.4f}")
+        if scored:
+            logger.info(f"Оценка: лучший score={scored[0].score:.4f}, худший score={scored[-1].score:.4f}")
+        else:
+            logger.warning("Оценка: нет допустимых кандидатов для скоринга")
 
         return scored
 
