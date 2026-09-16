@@ -179,18 +179,19 @@ class OptimizationAgent:
         return candidates
 
     def _generate_blending_candidates(self, num_candidates: int = 20) -> List[Candidate]:
-        """Dirichlet для блендинга (сумма = 1.0)."""
+        """Dirichlet для блендинга (сумма = 1.0) с концентрацией вокруг базового состава."""
         fraction_names = list(self.blending_fractions.keys())
-        n_fractions = len(fraction_names)
-
         candidates = []
+        
+        # Концентрация вокруг текущего технологического рецепта
+        base_weights = np.array([self.blending_fractions[name].current for name in fraction_names])
+        alpha = base_weights * 60.0
+
         attempts = 0
-        max_attempts = num_candidates * 10
+        max_attempts = num_candidates * 50
 
         while len(candidates) < num_candidates and attempts < max_attempts:
             attempts += 1
-
-            alpha = np.ones(n_fractions)
             fractions = np.random.dirichlet(alpha)
 
             valid = True
@@ -199,17 +200,23 @@ class OptimizationAgent:
             for i, name in enumerate(fraction_names):
                 param = self.blending_fractions[name]
                 value = fractions[i]
-
                 if value < param.min or value > param.max:
                     valid = False
                     break
-
                 candidate[name] = float(np.round(value, 4))
 
             if valid:
                 total = sum(candidate.values())
                 candidate = {k: float(np.round(v / total, 4)) for k, v in candidate.items()}
+                diff = 1.0 - sum(candidate.values())
+                max_k = max(candidate.keys(), key=lambda k: candidate[k])
+                candidate[max_k] = float(np.round(candidate[max_k] + diff, 4))
                 candidates.append(Candidate(params={}, blending=candidate, source='dirichlet', id=self._next_id()))
+
+        # Гарантированное дополнение базовым рецептом, если сэмплов недостаточно
+        while len(candidates) < num_candidates:
+            base_recipe = {k: float(self.blending_fractions[k].current) for k in fraction_names}
+            candidates.append(Candidate(params={}, blending=base_recipe, source='baseline', id=self._next_id()))
 
         return candidates
 
@@ -294,18 +301,30 @@ class OptimizationAgent:
         logger.info(f"Veto: {len(feasible)}/{len(candidates)} кандидатов допустимы")
         return feasible
 
-    def _check_sulfur_veto(self, candidate: Candidate, quality_assessment: Optional[Dict[str, Any]]) -> Tuple[bool, Optional[str]]:
-        if quality_assessment:
-            sulfur_forecast = quality_assessment.get('predictions', {}).get('Sulfur', 8.5)
-            sulfur_risk = quality_assessment.get('risk_spec_violation', {}).get('P_S_gt_10', 0.0)
+    def _check_sulfur_veto(self, candidate: Candidate, quality_assessment: Optional[Any]) -> Tuple[bool, Optional[str]]:
+        if quality_assessment is not None:
+            sulfur_forecast = getattr(quality_assessment, 'predicted_sulfur', None)
+            if sulfur_forecast is None and isinstance(quality_assessment, dict):
+                sulfur_forecast = quality_assessment.get('predictions', {}).get('Sulfur', 8.5)
+
+            sulfur_risk = getattr(quality_assessment, 'risk_spec_violation', None)
+            if isinstance(sulfur_risk, dict):
+                sulfur_risk = sulfur_risk.get('P_S_gt_10', 0.0)
+            elif sulfur_risk is None and isinstance(quality_assessment, dict):
+                sulfur_risk = quality_assessment.get('risk_spec_violation', {}).get('P_S_gt_10', 0.0)
+            elif not isinstance(sulfur_risk, (int, float)):
+                sulfur_risk = 0.0
 
             if sulfur_risk > 0.1:
                 return True, f"P(S>10)={sulfur_risk:.3f}"
-            if sulfur_forecast > 10.0:
+            if sulfur_forecast is not None and sulfur_forecast > 10.0:
                 return True, f"Сера={sulfur_forecast:.2f}"
 
+            return False, None
+
         t6 = candidate.params.get('T6', 295.0)
-        sulfur_estimate = 15.0 - 0.02 * (t6 - 290.0)
+        # При T6=295 (норма): сера ~8.5 <= 10. При T6=290 (холодный реактор): сера ~11.5 > 10
+        sulfur_estimate = 8.5 - 0.6 * (t6 - 295.0)
 
         if sulfur_estimate > 10.0:
             return True, f"Оценка серы={sulfur_estimate:.2f}"
@@ -418,7 +437,10 @@ class OptimizationAgent:
 
         scored.sort(key=lambda x: x.score, reverse=True)
 
-        logger.info(f"Оценка: лучший score={scored[0].score:.4f}, худший score={scored[-1].score:.4f}")
+        if scored:
+            logger.info(f"Оценка: лучший score={scored[0].score:.4f}, худший score={scored[-1].score:.4f}")
+        else:
+            logger.info("Оценка: нет вариантов для ранжирования")
 
         return scored
 
@@ -625,7 +647,8 @@ class OptimizationAgent:
         # Диапазоны для diversity
         t6_range = self.controlled_params['T6'].max - self.controlled_params['T6'].min  # 15°C
         f2_range = self.controlled_params['F2_F26_ratio'].max - self.controlled_params['F2_F26_ratio'].min  # 0.15
-        throughput_threshold = min_diversity * self.baseline['throughput']  # 0.1 * 250 = 25 т/ч
+        throughput_range = self.controlled_params['F9'].max - self.controlled_params['F9'].min  # 50 т/ч
+        throughput_threshold = min_diversity * throughput_range  # 0.1 * 50 = 5.0 т/ч
 
         t6_threshold = min_diversity * t6_range  # 0.1 * 15 = 1.5°C
         f2_threshold = min_diversity * f2_range  # 0.1 * 0.15 = 0.015
@@ -782,6 +805,9 @@ class OptimizationAgent:
         # Заполняем candidates и feasible
         result.candidates = candidates
         result.feasible = feasible
+        result.metrics['num_candidates'] = len(candidates)
+        result.metrics['num_feasible'] = len(feasible)
+        result.metrics['num_ranked'] = len(scored)
 
         logger.info(f"Оптимизация завершена: лучший score={result.recommended.score:.4f}")
 
