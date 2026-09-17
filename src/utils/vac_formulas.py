@@ -222,3 +222,233 @@ class VirtualAnalyzers:
                 5.78137 * row.get('P13', 0.0) - 34.58028 * row.get('P24', 0.0) -
                 0.00993 * row.get('F14', 0.0) - 0.99962 * row.get('W4', 0.0) +
                 0.32232 * row.get('T23', 0.0) - 0.09406 * row.get('T16', 0.0))
+
+
+# =============================================================================
+# ВЕКТОРНЫЕ ФУНКЦИИ ВАК ДЛЯ DATAFRAME (AGENT-01)
+# =============================================================================
+
+def _get_series(df: pd.DataFrame, tag: str, installation: Optional[str] = None) -> pd.Series:
+    """
+    Вспомогательная функция безопасного извлечения числовой серии из DataFrame.
+    Сначала ищет тег с суффиксом установки (например, T6_avt или T6_hydro),
+    затем стандартный тег без суффикса. Если колонка отсутствует, возвращает нули.
+    """
+    if installation:
+        specific_tag = f"{tag}_{installation}"
+        if specific_tag in df.columns:
+            return pd.to_numeric(df[specific_tag], errors='coerce').fillna(0.0)
+    if tag in df.columns:
+        return pd.to_numeric(df[tag], errors='coerce').fillna(0.0)
+    return pd.Series(0.0, index=df.index)
+
+
+def vac_d15_240_350(df: pd.DataFrame) -> pd.Series:
+    """
+    ВАК: Плотность при 15°C фракции 240-350°C (АВТ-6).
+    Формула: 791.22872 - 5.30294 * (F30 / (F32 + F30)) + 0.52755 * T66 - 0.15629 * T33
+    """
+    f30 = _get_series(df, 'F30', 'avt')
+    f32 = _get_series(df, 'F32', 'avt')
+    t66 = _get_series(df, 'T66', 'avt')
+    t33 = _get_series(df, 'T33', 'avt')
+
+    denom = f32 + f30
+    safe_denom = np.where(denom == 0, 1e-6, denom)
+    ratio = f30 / safe_denom
+
+    res = 791.22872 - 5.30294 * ratio + 0.52755 * t66 - 0.15629 * t33
+    return pd.Series(res, index=df.index, name='AVT6:240-350:D15')
+
+
+def vac_t50_240_350(df: pd.DataFrame) -> pd.Series:
+    """
+    ВАК: Температура выкипания 50% фракции 240-350°C (АВТ-6).
+    Формула: 283.177 + F7*(-0.01685) + 0.06248*F30 + 0.22048*F34 - 0.25816*F45 - 0.12159*F59 + 0.01221*F63
+    """
+    f7 = _get_series(df, 'F7', 'avt')
+    f30 = _get_series(df, 'F30', 'avt')
+    f34 = _get_series(df, 'F34', 'avt')
+    f45 = _get_series(df, 'F45', 'avt')
+    f59 = _get_series(df, 'F59', 'avt')
+    f63 = _get_series(df, 'F63', 'avt')
+
+    res = (283.177 - 0.01685 * f7 + 0.06248 * f30 +
+           0.22048 * f34 - 0.25816 * f45 - 0.12159 * f59 + 0.01221 * f63)
+    return pd.Series(res, index=df.index, name='AVT6:240-350:T50')
+
+
+def vac_ebp_240_350(df: pd.DataFrame) -> pd.Series:
+    """
+    ВАК: Конец кипения (EBP) фракции 240-350°C (АВТ-6).
+    Формула: 813.883 + 2.66463*F30 - 0.20239*T33 - 3.65888*F36 - 14.08235*T37 - 1.32603*T40 + 14.60206*T58
+    """
+    f30 = _get_series(df, 'F30', 'avt')
+    t33 = _get_series(df, 'T33', 'avt')
+    f36 = _get_series(df, 'F36', 'avt')
+    t37 = _get_series(df, 'T37', 'avt')
+    t40 = _get_series(df, 'T40', 'avt')
+    t58 = _get_series(df, 'T58', 'avt')
+
+    res = (813.883 + 2.66463 * f30 - 0.20239 * t33 -
+           3.65888 * f36 - 14.08235 * t37 - 1.32603 * t40 + 14.60206 * t58)
+    return pd.Series(res, index=df.index, name='AVT6:240-350:EBP')
+
+
+def vac_cfpp_240_350(df: pd.DataFrame) -> pd.Series:
+    """
+    ВАК: Предельная температура фильтруемости (CFPP) фракции 240-350°C (АВТ-6).
+    Формула: 31.40363 - 0.06784*T33 + 17.411*P67 - 8.11544*P4 - 0.47309*(F65/(F32+F30))
+    """
+    t33 = _get_series(df, 'T33', 'avt')
+    p67 = _get_series(df, 'P67', 'avt')
+    p4 = _get_series(df, 'P4', 'avt')
+    f65 = _get_series(df, 'F65', 'avt')
+    f32 = _get_series(df, 'F32', 'avt')
+    f30 = _get_series(df, 'F30', 'avt')
+
+    denom = f32 + f30
+    safe_denom = np.where(denom == 0, 1e-6, denom)
+    ratio = f65 / safe_denom
+
+    res = 31.40363 - 0.06784 * t33 + 17.411 * p67 - 8.11544 * p4 - 0.47309 * ratio
+    return pd.Series(res, index=df.index, name='AVT6:240-350:CFPP')
+
+
+def vac_sulfur_24_2000(df: pd.DataFrame) -> pd.Series:
+    """
+    ВАК: Содержание серы в гидроочищенном дизельном топливе (установка 24-2000).
+    Формула из ТЗ: 0.15 * T6 + 0.05 * F26 - 2.0 (клиппируется снизу нулем)
+    """
+    t6 = _get_series(df, 'T6', 'hydro')
+    f26 = _get_series(df, 'F26', 'hydro')
+
+    res = np.maximum(0.0, 0.15 * t6 + 0.05 * f26 - 2.0)
+    return pd.Series(res, index=df.index, name='24-2000:GODT:Sulfur')
+
+
+def vac_d15_godt(df: pd.DataFrame, d15_lims: float = 835.0) -> pd.Series:
+    """
+    ВАК: Плотность при 15°C ГОДТ (24-2000).
+    Формула: 667.881 + 0.15417*D15_lims + 0.00005*F22 + 0.10774*T11
+    """
+    f22 = _get_series(df, 'F22', 'hydro')
+    t11 = _get_series(df, 'T11', 'hydro')
+
+    res = 667.881 + 0.15417 * d15_lims + 0.00005 * f22 + 0.10774 * t11
+    return pd.Series(res, index=df.index, name='24-2000:GODT:D15')
+
+
+def vac_t50_godt(df: pd.DataFrame) -> pd.Series:
+    """
+    ВАК: Температура выкипания 50% ГОДТ (24-2000).
+    Формула: 44.625 + 10.0224*P13 + 0.06981*F9 + 0.8052*T6
+    """
+    p13 = _get_series(df, 'P13', 'hydro')
+    f9 = _get_series(df, 'F9', 'hydro')
+    t6 = _get_series(df, 'T6', 'hydro')
+
+    res = 44.625 + 10.0224 * p13 + 0.06981 * f9 + 0.8052 * t6
+    return pd.Series(res, index=df.index, name='24-2000:GODT:T50')
+
+
+def vac_t95_godt(df: pd.DataFrame, t95_lims: float = 350.0) -> pd.Series:
+    """
+    ВАК: Температура выкипания 95% ГОДТ (24-2000).
+    Формула: 0.03814*F9 - 9.201 - 0.00002*F2 + 0.62259*T6 + 0.48321*T95_lims
+    """
+    f9 = _get_series(df, 'F9', 'hydro')
+    f2 = _get_series(df, 'F2', 'hydro')
+    t6 = _get_series(df, 'T6', 'hydro')
+
+    res = 0.03814 * f9 - 9.201 - 0.00002 * f2 + 0.62259 * t6 + 0.48321 * t95_lims
+    return pd.Series(res, index=df.index, name='24-2000:GODT:T95')
+
+
+def vac_cfpp_godt(df: pd.DataFrame) -> pd.Series:
+    """
+    ВАК: Предельная температура фильтруемости (CFPP) ГОДТ (24-2000).
+    Формула: 0.22088*T6 - 102.375 - 47.75834*P8 + 0.03862*F9 + 43.60207*W7 + 43.81849*P24
+    """
+    t6 = _get_series(df, 'T6', 'hydro')
+    p8 = _get_series(df, 'P8', 'hydro')
+    f9 = _get_series(df, 'F9', 'hydro')
+    w7 = _get_series(df, 'W7', 'hydro')
+    p24 = _get_series(df, 'P24', 'hydro')
+
+    res = 0.22088 * t6 - 102.375 - 47.75834 * p8 + 0.03862 * f9 + 43.60207 * w7 + 43.81849 * p24
+    return pd.Series(res, index=df.index, name='24-2000:GODT:CFPP')
+
+
+def vac_ibp_godt(df: pd.DataFrame) -> pd.Series:
+    """
+    ВАК: Начало кипения (IBP) ГОДТ (24-2000).
+    Формула: 137.762 - 0.0653*F26 + 0.00011*F22 + 5.78137*P13 - 34.58028*P24 -
+             0.00993*F14 - 0.99962*W4 + 0.32232*T23 - 0.09406*T16
+    """
+    f26 = _get_series(df, 'F26', 'hydro')
+    f22 = _get_series(df, 'F22', 'hydro')
+    p13 = _get_series(df, 'P13', 'hydro')
+    p24 = _get_series(df, 'P24', 'hydro')
+    f14 = _get_series(df, 'F14', 'hydro')
+    w4 = _get_series(df, 'W4', 'hydro')
+    t23 = _get_series(df, 'T23', 'hydro')
+    t16 = _get_series(df, 'T16', 'hydro')
+
+    res = (137.762 - 0.0653 * f26 + 0.00011 * f22 + 5.78137 * p13 - 34.58028 * p24 -
+           0.00993 * f14 - 0.99962 * w4 + 0.32232 * t23 - 0.09406 * t16)
+    return pd.Series(res, index=df.index, name='24-2000:GODT:IBP')
+
+
+def calculate_all_vac(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Комплексный расчёт всех формул ВАК по DataFrame телеметрии.
+    
+    Входные данные:
+        df: DataFrame с колонками телеметрии КИП. Должен содержать колонку 'date'
+            или 'timestamp' (или временной индекс).
+            
+    Выходные данные:
+        DataFrame канонического long-формата с колонками:
+            ['date', 'tag', 'vac_value']
+    """
+    if df.empty:
+        return pd.DataFrame(columns=['date', 'tag', 'vac_value'])
+
+    # Извлечение временной шкалы
+    if 'date' in df.columns:
+        date_series = pd.to_datetime(df['date'])
+    elif 'timestamp' in df.columns:
+        date_series = pd.to_datetime(df['timestamp'])
+    elif isinstance(df.index, pd.DatetimeIndex):
+        date_series = df.index.to_series()
+    else:
+        date_series = pd.Series(df.index, name='date')
+
+    formulas = {
+        'AVT6:240-350:D15': vac_d15_240_350,
+        'AVT6:240-350:T50': vac_t50_240_350,
+        'AVT6:240-350:EBP': vac_ebp_240_350,
+        'AVT6:240-350:CFPP': vac_cfpp_240_350,
+        '24-2000:GODT:Sulfur': vac_sulfur_24_2000,
+        '24-2000:GODT:D15': vac_d15_godt,
+        '24-2000:GODT:T50': vac_t50_godt,
+        '24-2000:GODT:T95': vac_t95_godt,
+        '24-2000:GODT:CFPP': vac_cfpp_godt,
+        '24-2000:GODT:IBP': vac_ibp_godt,
+    }
+
+    records = []
+    for tag_name, formula_fn in formulas.items():
+        vals = formula_fn(df)
+        tag_df = pd.DataFrame({
+            'date': date_series.values,
+            'tag': tag_name,
+            'vac_value': vals.values.astype(float)
+        })
+        records.append(tag_df)
+
+    result_df = pd.concat(records, ignore_index=True)
+    result_df.sort_values(by=['date', 'tag'], inplace=True)
+    result_df.reset_index(drop=True, inplace=True)
+    return result_df
