@@ -57,7 +57,7 @@ class ScoredCandidate:
 @dataclass
 class OptimizationResult:
     """
-    Результат оптимизации.
+    Результат оптимизации (OPT-05).
 
     Атрибуты:
     - timestamp: время оптимизации
@@ -66,15 +66,32 @@ class OptimizationResult:
     - ranked: оценённые и отсортированные кандидаты
     - recommended: топ-1 рекомендация
     - alternatives: 2-3 альтернативы
-    - metrics: метрики оптимизации
+    - metrics: метрики оптимизации (throughput, energy, risk, best_score...)
     """
     timestamp: pd.Timestamp
-    candidates: List[Candidate]
-    feasible: List[Candidate]
-    ranked: List[ScoredCandidate]
-    recommended: ScoredCandidate
-    alternatives: List[ScoredCandidate]
-    metrics: Dict[str, Any]
+    candidates: List[Any] = field(default_factory=list)
+    feasible: List[Any] = field(default_factory=list)
+    ranked: List[Any] = field(default_factory=list)
+    recommended: Optional[Any] = None
+    alternatives: List[Any] = field(default_factory=list)
+    metrics: Dict[str, Any] = field(default_factory=dict)
+
+    # Поля для обратной совместимости
+    is_solution_found: bool = True
+    top_recommendation: Optional[Any] = None
+    evaluated_candidates_count: int = 0
+    valid_candidates_count: int = 0
+    refusal_reason: Optional[str] = None
+
+    def __post_init__(self):
+        if self.top_recommendation is None and self.recommended is not None:
+            self.top_recommendation = self.recommended
+        elif self.recommended is None and self.top_recommendation is not None:
+            self.recommended = self.top_recommendation
+
+    def __iter__(self):
+        """Поддержка распаковки: recommended, alternatives = opt_result"""
+        return iter((self.recommended, self.alternatives))
 
 
 # ============================================================================
@@ -511,35 +528,35 @@ class OptimizationAgent:
 
     def _rank_pareto(
         self,
-        scored: List[ScoredCandidate],
+        scored: List[Any],
         num_alternatives: int = 3,
         min_diversity: float = 0.1
-    ) -> Tuple[ScoredCandidate, List[ScoredCandidate]]:
+    ) -> OptimizationResult:
         """
-        Выбор топ-1 + альтернативы через Pareto-фронт.
+        Выбор топ-1 + альтернативы через Pareto-фронт (OPT-05).
 
         Логика:
         1. Сортировка по score (убывание).
         2. Топ-1 = лучший по score.
         3. Альтернативы = следующие 2-3 с проверкой diversity.
-
-        Diversity проверяется по:
-        - T6 (разница ≥ min_diversity * диапазон)
-        - F2_F26_ratio (разница ≥ min_diversity * диапазон)
-        - Throughput (разница ≥ min_diversity * baseline)
+        4. Формирование метрик и возврат OptimizationResult.
 
         Args:
-            scored: оценённые варианты (отсортированные по score)
+            scored: оценённые варианты (List[ScoredCandidate] или List[Dict])
             num_alternatives: количество альтернатив (2-3)
             min_diversity: минимальная разница между альтернативами (0..1)
 
         Returns:
-            (топ-1 рекомендация, список альтернатив)
+            OptimizationResult (поддерживает распаковку как (recommended, alternatives))
         """
         logger.info(f"Pareto: выбор топ-1 + {num_alternatives} альтернатив из {len(scored)} вариантов")
 
+        def _get_val(item, attr, default=0.0):
+            if isinstance(item, dict):
+                return item.get(attr, default)
+            return getattr(item, attr, default)
+
         if not scored:
-            # Пустой результат
             empty = ScoredCandidate(
                 candidate=Candidate(params={}, blending={}, source='none', id=0),
                 throughput=0,
@@ -551,74 +568,107 @@ class OptimizationAgent:
                 score=0,
                 score_breakdown={}
             )
-            return empty, []
+            return OptimizationResult(
+                timestamp=pd.Timestamp.now(),
+                candidates=[],
+                feasible=[],
+                ranked=[],
+                recommended=empty,
+                alternatives=[],
+                metrics={'throughput': 0.0, 'energy': 0.0, 'risk': 0.0}
+            )
 
         # ================================================================
         # 1. СОРТИРОВКА ПО SCORE (убывание)
         # ================================================================
-
-        # scored уже отсортирован в score_candidates
-        ranked = scored
+        ranked = sorted(scored, key=lambda x: _get_val(x, 'score', 0.0), reverse=True)
 
         # ================================================================
         # 2. ТОП-1 РЕКОМЕНДАЦИЯ
         # ================================================================
-
         recommended = ranked[0]
 
         logger.info(
-            f"Топ-1: id={recommended.candidate.id}, "
-            f"score={recommended.score:.4f}, "
-            f"throughput={recommended.throughput:.2f}, "
-            f"energy={recommended.energy_proxy:.3f}, "
-            f"risk={recommended.risk_index:.3f}"
+            f"Топ-1: score={_get_val(recommended, 'score', 0.0):.4f}, "
+            f"throughput={_get_val(recommended, 'throughput', 0.0):.2f}, "
+            f"energy={_get_val(recommended, 'energy_proxy', _get_val(recommended, 'energy', 0.0)):.3f}, "
+            f"risk={_get_val(recommended, 'risk_index', _get_val(recommended, 'risk', 0.0)):.3f}"
         )
 
         # ================================================================
         # 3. АЛЬТЕРНАТИВЫ С ПРОВЕРКОЙ DIVERSITY
         # ================================================================
-
         alternatives = []
 
-        for i in range(1, len(ranked)):
-            candidate = ranked[i]
+        is_all_scored_candidates = all(isinstance(x, ScoredCandidate) for x in ranked)
 
-            # Проверка diversity с уже выбранными альтернативами
-            is_diverse = self._check_diversity(
-                candidate=candidate,
-                reference=recommended,
-                alternatives=alternatives,
-                min_diversity=min_diversity
-            )
-
-            if is_diverse:
-                alternatives.append(candidate)
-
-                if len(alternatives) >= num_alternatives:
-                    break
-
-        # Если не набрали diversity, берем просто следующие по score
-        if len(alternatives) < num_alternatives:
+        if is_all_scored_candidates:
             for i in range(1, len(ranked)):
                 candidate = ranked[i]
-                if candidate not in alternatives:
+                is_diverse = self._check_diversity(
+                    candidate=candidate,
+                    reference=recommended,
+                    alternatives=alternatives,
+                    min_diversity=min_diversity
+                )
+                if is_diverse:
                     alternatives.append(candidate)
+                    if len(alternatives) >= num_alternatives:
+                        break
 
-                if len(alternatives) >= num_alternatives:
-                    break
+            # Если не набрали diversity, берем просто следующие по score
+            if len(alternatives) < num_alternatives:
+                for i in range(1, len(ranked)):
+                    candidate = ranked[i]
+                    if candidate not in alternatives:
+                        alternatives.append(candidate)
+                    if len(alternatives) >= num_alternatives:
+                        break
+        else:
+            # Для словарей: срез [1:1+num_alternatives]
+            alternatives = ranked[1:1 + num_alternatives]
 
         logger.info(f"Альтернативы: {len(alternatives)} вариантов")
 
-        for i, alt in enumerate(alternatives):
-            logger.info(
-                f"  Альтернатива {i+1}: id={alt.candidate.id}, "
-                f"score={alt.score:.4f}, "
-                f"throughput={alt.throughput:.2f}, "
-                f"energy={alt.energy_proxy:.3f}, "
-                f"risk={alt.risk_index:.3f}"
-            )
+        # ================================================================
+        # 4. МЕТРИКИ (throughput, energy, risk)
+        # ================================================================
+        rec_throughput = _get_val(recommended, 'throughput', 0.0)
+        rec_energy = _get_val(recommended, 'energy_proxy', _get_val(recommended, 'energy', 0.0))
+        rec_risk = _get_val(recommended, 'risk_index', _get_val(recommended, 'risk', 0.0))
+        rec_score = _get_val(recommended, 'score', 0.0)
 
-        return recommended, alternatives
+        metrics = {
+            'throughput': rec_throughput,
+            'energy': rec_energy,
+            'risk': rec_risk,
+            'best_score': rec_score,
+            'best_throughput': rec_throughput,
+            'best_energy': rec_energy,
+            'best_risk': rec_risk,
+            'num_candidates': len(scored),
+            'num_alternatives': len(alternatives),
+            'pareto_front': [
+                {
+                    'id': getattr(getattr(alt, 'candidate', None), 'id', i),
+                    'score': _get_val(alt, 'score', 0.0),
+                    'throughput': _get_val(alt, 'throughput', 0.0),
+                    'energy': _get_val(alt, 'energy_proxy', _get_val(alt, 'energy', 0.0)),
+                    'risk': _get_val(alt, 'risk_index', _get_val(alt, 'risk', 0.0))
+                }
+                for i, alt in enumerate([recommended] + alternatives)
+            ]
+        }
+
+        return OptimizationResult(
+            timestamp=pd.Timestamp.now(),
+            candidates=scored,
+            feasible=scored,
+            ranked=ranked,
+            recommended=recommended,
+            alternatives=alternatives,
+            metrics=metrics
+        )
 
     def _check_diversity(
         self,
@@ -686,7 +736,7 @@ class OptimizationAgent:
 
     def rank_pareto(
         self,
-        scored: List[ScoredCandidate],
+        scored: List[Any],
         num_alternatives: int = 3
     ) -> OptimizationResult:
         """
@@ -699,37 +749,7 @@ class OptimizationAgent:
         Returns:
             OptimizationResult
         """
-        recommended, alternatives = self._rank_pareto(scored, num_alternatives)
-
-        # Метрики
-        metrics = {
-            'num_candidates': len(scored),
-            'num_alternatives': len(alternatives),
-            'best_score': recommended.score,
-            'best_throughput': recommended.throughput,
-            'best_energy': recommended.energy_proxy,
-            'best_risk': recommended.risk_index,
-            'pareto_front': [
-                {
-                    'id': alt.candidate.id,
-                    'score': alt.score,
-                    'throughput': alt.throughput,
-                    'energy': alt.energy_proxy,
-                    'risk': alt.risk_index
-                }
-                for alt in [recommended] + alternatives
-            ]
-        }
-
-        return OptimizationResult(
-            timestamp=pd.Timestamp.now(),
-            candidates=[],  # Заполняется в optimize()
-            feasible=[],    # Заполняется в optimize()
-            ranked=scored,
-            recommended=recommended,
-            alternatives=alternatives,
-            metrics=metrics
-        )
+        return self._rank_pareto(scored, num_alternatives=num_alternatives)
 
     # ========================================================================
     # ОСНОВНОЙ МЕТОД ОПТИМИЗАЦИИ
