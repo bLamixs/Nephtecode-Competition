@@ -32,24 +32,63 @@ class QualityAssessment:
     - Оценку риска P(S > 10 ppm) выхода за спецификацию ГОСТ / ТР ТС (Евро-5).
     - Метаданные доверия к данным: источник (LIMS / PAK / VAC / HYBRID) и возраст замеров.
     """
-    timestamp: datetime
-    sulfur_forecast_mg_kg: float                    # Прогноз содержания серы в товарном ДТ (жёсткий предел <= 10 мг/кг)
+    timestamp: Any
+    sulfur_forecast_mg_kg: float = 8.5              # Прогноз содержания серы в товарном ДТ (жёсткий предел <= 10 мг/кг)
+    predictions: Dict[str, float] = field(default_factory=dict) # Словарь всех прогнозов {'Sulfur': ..., 'D15': ...}
     d15_forecast_kg_m3: Optional[float] = None       # Прогноз плотности при 15°C (норма 820..845 кг/м3)
     t50_forecast_c: Optional[float] = None           # Прогноз температуры перегонки 50%
     t90_forecast_c: Optional[float] = None           # Прогноз температуры перегонки 90%
     t95_forecast_c: Optional[float] = None           # Прогноз температуры перегонки 95% (макс 360 °C)
     cfpp_forecast_c: Optional[float] = None          # Предельная температура фильтруемости (ПТФ)
+    flash_forecast_c: Optional[float] = None         # Температура вспышки
     
     # Вероятностные оценки риска
+    risk_spec_violation: Dict[str, float] = field(default_factory=dict) # P(S>10), P(T95>spec)
     risk_sulfur_violation: float = 0.0               # Вероятность превышения серы > 10 мг/кг в диапазоне [0..1]
     risk_overall_quality: float = 0.0                # Интегральный риск нарушения любого показателя качества [0..1]
     
     # Метаданные качества входной информации
     confidence: float = 1.0                          # Степень уверенности модели в прогнозе [0..1]
     data_source: str = "HYBRID_VAC_ML"               # Приоритетный источник: "LIMS", "PAK", "VAC", "HYBRID"
+    age_min: int = 0                                 # Возраст анализа в минутах
     lims_age_hours: Optional[float] = None           # Время (в часах) с момента последнего отбора пробы ЛИМС
     pak_age_minutes: Optional[float] = None          # Время (в минутах) с последнего валидного показания ПАК
     warnings: List[str] = field(default_factory=list)# Предупреждения (например, "ЛИМС устарел > 48ч")
+
+    def __post_init__(self):
+        # Синхронизация predictions и отдельных полей
+        if not self.predictions:
+            self.predictions = {
+                'Sulfur': self.sulfur_forecast_mg_kg,
+                'D15': self.d15_forecast_kg_m3 if self.d15_forecast_kg_m3 is not None else 835.0,
+                'T50': self.t50_forecast_c if self.t50_forecast_c is not None else 280.0,
+                'T95': self.t95_forecast_c if self.t95_forecast_c is not None else 350.0,
+                'CFPP': self.cfpp_forecast_c if self.cfpp_forecast_c is not None else -10.0,
+            }
+            if self.t90_forecast_c is not None:
+                self.predictions['T90'] = self.t90_forecast_c
+            if self.flash_forecast_c is not None:
+                self.predictions['flash'] = self.flash_forecast_c
+        elif self.sulfur_forecast_mg_kg == 8.5 and 'Sulfur' in self.predictions:
+            self.sulfur_forecast_mg_kg = float(self.predictions['Sulfur'])
+
+        if not self.risk_spec_violation:
+            self.risk_spec_violation = {
+                'P_S_gt_10': self.risk_sulfur_violation,
+                'P_T95_gt_spec': 0.05 if (self.t95_forecast_c or 350.0) <= 360.0 else 0.85
+            }
+        elif 'P_S_gt_10' in self.risk_spec_violation and self.risk_sulfur_violation == 0.0:
+            self.risk_sulfur_violation = float(self.risk_spec_violation['P_S_gt_10'])
+
+        if self.lims_age_hours is None and self.age_min > 0:
+            self.lims_age_hours = self.age_min / 60.0
+
+    @property
+    def predicted_sulfur(self) -> float:
+        return self.sulfur_forecast_mg_kg
+
+    def get(self, key: str, default: Any = None) -> Any:
+        return getattr(self, key, default)
 
 
 @dataclass
@@ -59,16 +98,22 @@ class ReliabilityAssessment:
     
     Содержит:
     - Индекс интегрального риска оборудования и катализатора [0..1].
-    - Категорию тяжести режима (LOW, MEDIUM, HIGH, CRITICAL).
-    - Перечень лимитирующих факторов и активных ограничений.
+    - Категорию тяжести режима (low, medium, high / LOW, MEDIUM, HIGH).
+    - Перечень лимитирующих факторов и активных ограничений для оптимизатора.
     """
-    timestamp: datetime
+    timestamp: Any
     risk_index: float                                # Индекс тяжести режима (0 - оптимум, 1 - аварийный риск)
-    risk_class: str                                  # Категория риска: "LOW", "MEDIUM", "HIGH", "CRITICAL"
+    risk_class: str                                  # Категория риска: "low", "medium", "high"
     is_safe: bool = True                             # Флаг: допустим ли текущий режим для непрерывной работы
-    risk_factors: List[str] = field(default_factory=list) # Расшифровка факторов (например: "Перепад давления на Р-201 высок")
-    equipment_penalties: Dict[str, float] = field(default_factory=dict) # Штрафы по отдельным узлам (печи, реакторы, колонны)
+    risk_factors: List[Any] = field(default_factory=list) # Топ-факторы риска [{"tag": "T6", "deviation": 1.8, "weight": 0.3}, ...]
+    constraints_for_optimizer: List[Dict[str, Any]] = field(default_factory=list) # [{"tag": "T6", "min": 290, "max": 310}, ...]
+    confidence: float = 1.0                          # Степень уверенности
+    assumptions: List[str] = field(default_factory=list) # Допущения и гипотезы
+    equipment_penalties: Dict[str, float] = field(default_factory=dict) # Штрафы по отдельным узлам
     active_constraints: List[str] = field(default_factory=list)         # Активные коридоры безопасности КИП
+
+    def get(self, key: str, default: Any = None) -> Any:
+        return getattr(self, key, default)
 
 
 @dataclass
