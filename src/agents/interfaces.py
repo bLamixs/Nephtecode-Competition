@@ -139,20 +139,43 @@ class CandidateAction:
 @dataclass
 class OptimizationResult:
     """
-    Контракт результата генерации и селекции воздействий от Optimization Agent.
+    Контракт результата генерации и селекции воздействий от Optimization Agent (OPT-05).
     
     Содержит:
-    - Топ-1 рекомендуемое решение по совокупности критериев.
-    - Допустимые Парето-альтернативы для оператора (2-3 варианта).
-    - Статистику генерации и причину отказа, если ни одного допустимого сценария не найдено.
+    - Топ-1 рекомендуемое решение (recommended).
+    - Допустимые Парето-альтернативы (alternatives).
+    - Списки кандидатов (candidates, feasible, ranked).
+    - Метрики оптимизации (throughput, energy, risk, best_score...).
     """
-    timestamp: datetime
-    is_solution_found: bool                          # Найдено ли хотя бы одно допустимое решение
-    top_recommendation: Optional[CandidateAction] = None # Лучший вариант
-    alternatives: List[CandidateAction] = field(default_factory=list) # Альтернативные Парето-варианты
-    evaluated_candidates_count: int = 0              # Всего сгенерировано кандидатов
-    valid_candidates_count: int = 0                  # Число кандидатов, прошедших жёсткие ограничения
-    refusal_reason: Optional[str] = None             # Причина невозможности оптимизации
+    timestamp: Any
+    candidates: List[Any] = field(default_factory=list)
+    feasible: List[Any] = field(default_factory=list)
+    ranked: List[Any] = field(default_factory=list)
+    recommended: Optional[Any] = None
+    alternatives: List[Any] = field(default_factory=list)
+    metrics: Dict[str, Any] = field(default_factory=dict)
+    
+    # Поля для обратной совместимости
+    is_solution_found: bool = True
+    top_recommendation: Optional[Any] = None
+    evaluated_candidates_count: int = 0
+    valid_candidates_count: int = 0
+    refusal_reason: Optional[str] = None
+
+    def __post_init__(self):
+        if self.top_recommendation is None and self.recommended is not None:
+            self.top_recommendation = self.recommended
+        elif self.recommended is None and self.top_recommendation is not None:
+            self.recommended = self.top_recommendation
+
+        if not self.evaluated_candidates_count and self.candidates:
+            self.evaluated_candidates_count = len(self.candidates)
+        if not self.valid_candidates_count and self.feasible:
+            self.valid_candidates_count = len(self.feasible)
+
+    def __iter__(self):
+        """Поддержка распаковки: recommended, alternatives = opt_result"""
+        return iter((self.recommended, self.alternatives))
 
 
 @dataclass
