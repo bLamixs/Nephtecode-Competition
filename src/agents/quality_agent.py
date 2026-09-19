@@ -223,7 +223,7 @@ class QualityAgent:
         logger.info(f"Модель сохранена в: {self.model_path}")
         return self.model
 
-    def predict(
+    def _predict_sulfur(
         self,
         telemetry: pd.DataFrame,
         quality: Optional[pd.DataFrame] = None,
@@ -247,6 +247,206 @@ class QualityAgent:
         corrected_pred = np.maximum(0.0, vac_base.values + correction)
         return pd.Series(corrected_pred, index=telemetry.index, name='predicted_sulfur')
 
+    def predict_forecast(
+        self,
+        telemetry: pd.DataFrame,
+        timestamps: Optional[List[Any]] = None,
+        horizons_min: Optional[List[int]] = None
+    ) -> pd.DataFrame:
+        """
+        Мультигоризонтный прогноз показателей качества (AGENT-03):
+        Горизонты: 30, 60, 120 минут.
+        
+        Учёт запаздывания отклика (lag_report):
+        - Sulfur: lag = 60 мин
+        - D15: lag = 30 мин
+        - T50/T90/T95: lag = 90 мин
+        - CFPP: lag = 30 мин
+        - flash: lag = 30 мин
+        
+        Returns:
+            DataFrame с колонками: date, horizon_min, Sulfur, D15, T50, T90, T95, CFPP, flash
+        """
+        if horizons_min is None:
+            horizons_min = [30, 60, 120]
+
+        lags = {
+            'Sulfur': 60,
+            'D15': 30,
+            'T50': 90,
+            'T90': 90,
+            'T95': 90,
+            'CFPP': 30,
+            'flash': 30
+        }
+
+        # Определение дат
+        if 'date' in telemetry.columns:
+            dates = pd.to_datetime(telemetry['date'])
+        elif isinstance(telemetry.index, pd.DatetimeIndex):
+            dates = telemetry.index.to_series()
+        else:
+            dates = pd.date_range(end=pd.Timestamp.now(), periods=len(telemetry), freq='10min')
+
+        forecast_records = []
+
+        # Базовый шаг дискретизации (10 мин)
+        step_min = 10
+
+        for horizon in horizons_min:
+            # Для каждого горизонта и целевого показателя рассчитываем эффективное запаздывание
+            # tau: время отклика процесса.
+            # Если tau > horizon: изменение еще не дошло до выхода, сказывается прошлое состояние на (tau - horizon) мин назад
+            # Если tau <= horizon: новое установившееся состояние (текущий режим сохраняется)
+            
+            # 1. Sulfur
+            shift_sulfur = max(0, int((lags['Sulfur'] - horizon) / step_min))
+            telem_sulfur = telemetry.shift(shift_sulfur).bfill() if shift_sulfur > 0 else telemetry
+            pred_sulfur = self._predict_sulfur(telem_sulfur).values
+
+            # 2. D15
+            shift_d15 = max(0, int((lags['D15'] - horizon) / step_min))
+            telem_d15 = telemetry.shift(shift_d15).bfill() if shift_d15 > 0 else telemetry
+            pred_d15 = vac_d15_godt(telem_d15).values
+
+            # 3. T50, T90, T95
+            shift_dist = max(0, int((lags['T95'] - horizon) / step_min))
+            telem_dist = telemetry.shift(shift_dist).bfill() if shift_dist > 0 else telemetry
+            pred_t50 = vac_t50_godt(telem_dist).values
+            pred_t95 = vac_t95_godt(telem_dist).values
+            pred_t90 = np.maximum(pred_t50, pred_t95 - 12.0)
+
+            # 4. CFPP
+            shift_cfpp = max(0, int((lags['CFPP'] - horizon) / step_min))
+            telem_cfpp = telemetry.shift(shift_cfpp).bfill() if shift_cfpp > 0 else telemetry
+            pred_cfpp = vac_cfpp_godt(telem_cfpp).values
+
+            # 5. Flash point
+            shift_flash = max(0, int((lags['flash'] - horizon) / step_min))
+            telem_flash = telemetry.shift(shift_flash).bfill() if shift_flash > 0 else telemetry
+            t6_series = self._get_tag_series(telem_flash, 'T6')
+            pred_flash = np.clip(68.0 - 0.15 * (t6_series.values - 295.0), 45.0, 90.0)
+
+            df_h = pd.DataFrame({
+                'date': dates.values,
+                'horizon_min': horizon,
+                'Sulfur': pred_sulfur,
+                'D15': pred_d15,
+                'T50': pred_t50,
+                'T90': pred_t90,
+                'T95': pred_t95,
+                'CFPP': pred_cfpp,
+                'flash': pred_flash
+            })
+            forecast_records.append(df_h)
+
+        result_df = pd.concat(forecast_records, ignore_index=True)
+
+        # Если переданы конкретные timestamps — фильтруем по ним
+        if timestamps is not None and len(timestamps) > 0:
+            ts_series = pd.to_datetime(timestamps)
+            result_df = result_df[result_df['date'].isin(ts_series)].copy()
+
+        return result_df
+
+    def predict(
+        self,
+        telemetry: pd.DataFrame,
+        quality: Optional[Any] = None,
+        vac: Optional[pd.Series] = None,
+        timestamps: Optional[List[Any]] = None,
+        horizons_min: Optional[List[int]] = None
+    ) -> Union[pd.Series, pd.DataFrame]:
+        """
+        Универсальный метод прогнозирования (AGENT-02 и AGENT-03):
+        - Если передан список timestamps или указан horizons_min -> возвращает DataFrame прогнозов на 30/60/120 мин.
+        - Иначе возвращает pd.Series прогноза серы (для совместимости с AGENT-02).
+        """
+        # Если во 2-й позиционный аргумент передан список timestamps (например, predict(df, [ts1, ts2]))
+        if isinstance(quality, (list, pd.DatetimeIndex, np.ndarray)):
+            return self.predict_forecast(telemetry, timestamps=list(quality), horizons_min=horizons_min)
+        
+        if timestamps is not None or horizons_min is not None:
+            return self.predict_forecast(telemetry, timestamps=timestamps, horizons_min=horizons_min)
+
+        return self._predict_sulfur(telemetry, quality=quality, vac=vac)
+
+    def assess_risk(
+        self,
+        forecast: pd.DataFrame,
+        specs: Optional[Dict[str, float]] = None,
+        window: int = 6
+    ) -> pd.DataFrame:
+        """
+        Оценка риска нарушения спецификаций качества (AGENT-04).
+        
+        Параметры:
+            forecast: DataFrame с прогнозами (Sulfur, T95, D15, CFPP, flash)
+            specs: словарь ограничений спецификаций
+            window: размер скользящего окна (по умолчанию 6 точек = 60 мин при шаге 10 мин)
+            
+        Returns:
+            DataFrame с рассчитанными вероятностями нарушений:
+            P_S_gt_10, P_T95_gt_spec, P_D15_violation, P_CFPP_violation, P_flash_violation, risk_overall
+        """
+        default_specs = {
+            'Sulfur': 10.0,
+            'T95': 360.0,
+            'D15_min': 820.0,
+            'D15_max': 845.0,
+            'CFPP': -5.0,
+            'flash': 55.0
+        }
+        if specs:
+            default_specs.update(specs)
+
+        risk_df = pd.DataFrame(index=forecast.index)
+
+        # 1. P(S > 10) = доля прогнозов > 10 в скользящем окне 60 мин
+        if 'Sulfur' in forecast.columns:
+            s_violation = (forecast['Sulfur'] > default_specs['Sulfur']).astype(float)
+            risk_df['P_S_gt_10'] = s_violation.rolling(window=window, min_periods=1).mean()
+        else:
+            risk_df['P_S_gt_10'] = 0.0
+
+        # 2. P(T95 > spec) = доля прогнозов T95 > spec в скользящем окне
+        if 'T95' in forecast.columns:
+            t95_violation = (forecast['T95'] > default_specs['T95']).astype(float)
+            risk_df['P_T95_gt_spec'] = t95_violation.rolling(window=window, min_periods=1).mean()
+        else:
+            risk_df['P_T95_gt_spec'] = 0.0
+
+        # 3. P(D15 violation)
+        if 'D15' in forecast.columns:
+            d15_violation = (
+                (forecast['D15'] < default_specs['D15_min']) |
+                (forecast['D15'] > default_specs['D15_max'])
+            ).astype(float)
+            risk_df['P_D15_violation'] = d15_violation.rolling(window=window, min_periods=1).mean()
+        else:
+            risk_df['P_D15_violation'] = 0.0
+
+        # 4. P(CFPP violation)
+        if 'CFPP' in forecast.columns:
+            cfpp_violation = (forecast['CFPP'] > default_specs['CFPP']).astype(float)
+            risk_df['P_CFPP_violation'] = cfpp_violation.rolling(window=window, min_periods=1).mean()
+        else:
+            risk_df['P_CFPP_violation'] = 0.0
+
+        # 5. P(flash violation)
+        if 'flash' in forecast.columns:
+            flash_violation = (forecast['flash'] < default_specs['flash']).astype(float)
+            risk_df['P_flash_violation'] = flash_violation.rolling(window=window, min_periods=1).mean()
+        else:
+            risk_df['P_flash_violation'] = 0.0
+
+        # 6. Общий интегральный риск нарушения качества
+        risk_df['risk_overall'] = risk_df[
+            ['P_S_gt_10', 'P_T95_gt_spec', 'P_D15_violation', 'P_CFPP_violation', 'P_flash_violation']
+        ].max(axis=1)
+
+        return pd.concat([forecast, risk_df], axis=1)
+
     async def assess(
         self,
         telemetry: pd.DataFrame,
@@ -257,7 +457,7 @@ class QualityAgent:
         Возвращает структурированный dataclass QualityAssessment.
         """
         # 1. Расчёт прогноза серы
-        pred_sulfur_series = self.predict(telemetry, quality_data)
+        pred_sulfur_series = self._predict_sulfur(telemetry, quality_data)
         latest_sulfur = float(pred_sulfur_series.iloc[-1]) if len(pred_sulfur_series) > 0 else 8.5
 
         # 2. Расчёт сопутствующих показателей качества по формулам ВАК
@@ -265,18 +465,42 @@ class QualityAgent:
         t50_series = vac_t50_godt(telemetry)
         t95_series = vac_t95_godt(telemetry)
         cfpp_series = vac_cfpp_godt(telemetry)
+        t6_series = self._get_tag_series(telemetry, 'T6')
+        latest_t6 = float(t6_series.iloc[-1]) if len(t6_series) > 0 else 295.0
+        latest_flash = float(np.clip(68.0 - 0.15 * (latest_t6 - 295.0), 45.0, 90.0))
 
         latest_d15 = float(d15_series.iloc[-1]) if len(d15_series) > 0 else 835.0
         latest_t50 = float(t50_series.iloc[-1]) if len(t50_series) > 0 else 280.0
         latest_t95 = float(t95_series.iloc[-1]) if len(t95_series) > 0 else 350.0
+        latest_t90 = max(latest_t50, latest_t95 - 12.0)
         latest_cfpp = float(cfpp_series.iloc[-1]) if len(cfpp_series) > 0 else -10.0
 
-        # 3. Оценка риска нарушения спецификации P(S > 10 ppm)
+        # 3. Оценка риска нарушения спецификаций
         # Логистическая аппроксимация вероятности превышения жесткого порога 10.0 мг/кг
-        # При сере 9.0 мг/кг риск мал (~0.05), при сере 10.0 мг/кг риск = 0.50, при сере 11.0 риск = 0.95
-        risk_sulfur = float(1.0 / (1.0 + np.exp(-3.0 * (latest_sulfur - 10.0))))
+        exp_s = np.clip(-3.0 * (latest_sulfur - 10.0), -50.0, 50.0)
+        risk_sulfur = float(1.0 / (1.0 + np.exp(exp_s)))
+        
+        exp_t95 = np.clip(-1.0 * (latest_t95 - 360.0), -50.0, 50.0)
+        risk_t95 = float(1.0 / (1.0 + np.exp(exp_t95)))
+        
+        risk_d15 = 0.05 if (820.0 <= latest_d15 <= 845.0) else 0.85
+        
+        exp_cfpp = np.clip(-1.0 * (latest_cfpp - (-5.0)), -50.0, 50.0)
+        risk_cfpp = float(1.0 / (1.0 + np.exp(exp_cfpp)))
+        
+        exp_flash = np.clip(1.0 * (latest_flash - 55.0), -50.0, 50.0)
+        risk_flash = float(1.0 / (1.0 + np.exp(exp_flash)))
 
-        # 4. Анализ возраста замеров и источников
+        risk_spec_violation = {
+            'P_S_gt_10': risk_sulfur,
+            'P_T95_gt_spec': risk_t95,
+            'P_D15_violation': risk_d15,
+            'P_CFPP_violation': risk_cfpp,
+            'P_flash_violation': risk_flash
+        }
+        risk_overall = max(risk_sulfur, risk_t95, risk_d15, risk_cfpp, risk_flash)
+
+        # 4. Анализ возраста замеров и источников (AGENT-04)
         age_min = 0.0
         data_source = "HYBRID_VAC_ML"
         warnings = []
@@ -294,8 +518,13 @@ class QualityAgent:
         if age_min > 120:
             warnings.append(f"Анализы устарели: age_min={age_min:.0f} мин > 120 мин")
 
-        # Доверительный интервал
-        confidence = max(0.2, min(1.0, 1.0 - (age_min / 300.0)))
+        # Оценка уверенности по ТЗ (AGENT-04):
+        # confidence = 1.0 - age_min / 240 (снижение доверия с возрастом).
+        # Если ЛИМС/ПАК нет >240 мин -> confidence = 0.3.
+        if age_min > 240:
+            confidence = 0.3
+        else:
+            confidence = max(0.3, min(1.0, 1.0 - (age_min / 240.0)))
 
         from datetime import timezone
         ts = datetime.now(timezone.utc)
@@ -305,18 +534,32 @@ class QualityAgent:
             except Exception:
                 pass
 
+        predictions_dict = {
+            'Sulfur': latest_sulfur,
+            'D15': latest_d15,
+            'T50': latest_t50,
+            'T90': latest_t90,
+            'T95': latest_t95,
+            'CFPP': latest_cfpp,
+            'flash': latest_flash
+        }
+
         return QualityAssessment(
             timestamp=ts,
             sulfur_forecast_mg_kg=latest_sulfur,
+            predictions=predictions_dict,
             d15_forecast_kg_m3=latest_d15,
             t50_forecast_c=latest_t50,
-            t90_forecast_c=None,
+            t90_forecast_c=latest_t90,
             t95_forecast_c=latest_t95,
             cfpp_forecast_c=latest_cfpp,
+            flash_forecast_c=latest_flash,
+            risk_spec_violation=risk_spec_violation,
             risk_sulfur_violation=risk_sulfur,
-            risk_overall_quality=risk_sulfur,
+            risk_overall_quality=risk_overall,
             confidence=confidence,
             data_source=data_source,
+            age_min=int(age_min),
             lims_age_hours=age_min / 60.0,
             pak_age_minutes=age_min,
             warnings=warnings
