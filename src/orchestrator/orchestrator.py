@@ -419,7 +419,7 @@ class Orchestrator:
             'F9': float(telemetry['F9'].iloc[-1]) if 'F9' in telemetry else 250.0,
         }
 
-        return await self.optimization_agent.optimize(
+        return self.optimization_agent.optimize(
             current_state=current_state,
             quality_assessment=quality_assessment,
             reliability_assessment=reliability_assessment

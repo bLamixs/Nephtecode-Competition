@@ -59,16 +59,15 @@ class InputValidator:
         self.max_age_min = max_age_min
         self.consistency_threshold = consistency_threshold
 
-        # Критические теги для проверки полноты
+        # Критические теги телеметрии для проверки полноты
         if critical_tags is None:
             self.critical_tags = [
                 'T6',  # Температура реактора
                 'F2_F26_ratio',  # ВСГ/сырьё
                 'F9',  # Расход на гидроочистку
-                'T55',  # Температура печи
-                'Sulfur',  # Сера (ЛИМС/ПАК)
-                'D15',  # Плотность (ЛИМС/ПАК)
             ]
+        else:
+            self.critical_tags = critical_tags
 
         logger.info(
             f"InputValidator инициализирован: "
