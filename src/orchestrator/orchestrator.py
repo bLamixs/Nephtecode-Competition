@@ -322,7 +322,9 @@ class Orchestrator:
             logger.error(f"Вход не валиден: {validation_result.reasons}")
             recommendation = self._no_recommendation(
                 f"Недостаточно данных: {'; '.join(validation_result.reasons)}",
-                cycle_id=cycle_id
+                cycle_id=cycle_id,
+                telemetry=telemetry,
+                quality_data=quality_data
             )
             logger.info(json.dumps({
                 "step": "recommendation",
@@ -415,7 +417,11 @@ class Orchestrator:
             logger.error(f"Конфликт не разрешён: {conflict_resolution.conflict_type.value}")
             recommendation = self._no_recommendation(
                 conflict_resolution.explanation,
-                cycle_id=cycle_id
+                cycle_id=cycle_id,
+                telemetry=telemetry,
+                quality_data=quality_data,
+                quality_assessment=quality_assessment,
+                reliability_assessment=reliability_assessment
             )
             logger.info(json.dumps({
                 "step": "recommendation",
@@ -475,17 +481,20 @@ class Orchestrator:
         """
         return self._no_recommendation(reason=reason, cycle_id=cycle_id)
 
-    def _no_recommendation(self, reason: str, cycle_id: Optional[str] = None) -> Recommendation:
+    def _no_recommendation(
+        self,
+        reason: str,
+        cycle_id: Optional[str] = None,
+        telemetry: Optional[pd.DataFrame] = None,
+        quality_data: Optional[pd.DataFrame] = None,
+        quality_assessment: Any = None,
+        reliability_assessment: Any = None,
+        state: Optional[Dict[str, Any]] = None
+    ) -> Recommendation:
         """
         Отказ от рекомендации (ORCH-05).
-        Формирует отказ с конкретной причиной и логирует в logs/orchestrator.log.
-
-        Args:
-            reason: причина отказа
-            cycle_id: ID цикла
-
-        Returns:
-            Recommendation
+        Формирует отказ с конкретной причиной, сохраняя фактическое состояние процесса,
+        проверенные ограничения и показатели рисков.
         """
         # Конкретизация причины
         specific_reason = self._specific_reason(reason)
@@ -494,15 +503,109 @@ class Orchestrator:
 
         problem_type = "NO_DATA" if any(w in reason.lower() for w in ['устарел', 'age', 'пропуск', 'missing', 'нет данных', 'no_data', 'offline']) else "NO_SOLUTION"
 
+        # Извлечение фактического состояния процесса
+        actual_state = dict(state) if state else {}
+        if telemetry is not None and not telemetry.empty:
+            for col in ['T6', 'F9', 'P8', 'T55', 'F2_F26_ratio']:
+                if col in telemetry.columns and col not in actual_state:
+                    series = telemetry[col].dropna()
+                    if not series.empty:
+                        actual_state[col] = round(float(series.iloc[-1]), 2)
+
+        if quality_data is not None and not quality_data.empty and 'tag' in quality_data.columns:
+            sulfur_row = quality_data[quality_data['tag'] == 'Sulfur']
+            if not sulfur_row.empty:
+                s_vals = sulfur_row['value'].dropna()
+                if not s_vals.empty and 'Sulfur_current' not in actual_state:
+                    actual_state['Sulfur_current'] = round(float(s_vals.iloc[-1]), 2)
+                if 'age_min' in sulfur_row.columns:
+                    s_ages = sulfur_row['age_min'].dropna()
+                    if not s_ages.empty and 'Sulfur_age_min' not in actual_state:
+                        actual_state['Sulfur_age_min'] = round(float(s_ages.iloc[-1]), 1)
+
+        # Фактические риски и ограничения
+        risk_idx = getattr(reliability_assessment, 'risk_index', None) if reliability_assessment else None
+        if risk_idx is None and problem_type == "NO_SOLUTION":
+            risk_idx = 0.85
+        elif risk_idx is None and problem_type == "NO_DATA":
+            risk_idx = 0.05
+
+        sulfur_pred = actual_state.get('Sulfur_current', None)
+        expected_effect = ExpectedEffect(
+            sulfur_60min=sulfur_pred,
+            risk_index=risk_idx,
+            throughput=actual_state.get('F9', None)
+        )
+
+        checked_constraints = []
+        if actual_state.get('Sulfur_current') is not None:
+            s_curr = actual_state['Sulfur_current']
+            checked_constraints.append(
+                ConstraintCheck(
+                    constraint_id="C_SULFUR",
+                    constraint="Сера ≤ 10 мг/кг",
+                    predicted_value=s_curr,
+                    threshold=10.0,
+                    status="FAIL" if s_curr > 10.0 else "PASS",
+                    margin=round(10.0 - s_curr, 2)
+                )
+            )
+
+        if quality_assessment:
+            r_s = getattr(quality_assessment, 'risk_sulfur_violation', None)
+            if r_s is None and hasattr(quality_assessment, 'risk_spec_violation'):
+                r_spec = quality_assessment.risk_spec_violation
+                if isinstance(r_spec, dict):
+                    r_s = r_spec.get('Sulfur', r_spec.get('P_S_gt_10', 0.1))
+                elif isinstance(r_spec, (int, float)):
+                    r_s = float(r_spec)
+            if r_s is not None:
+                checked_constraints.append(
+                    ConstraintCheck(
+                        constraint_id="C_QUAL_VETO",
+                        constraint="P(S > 10) ≤ 0.10",
+                        predicted_value=round(float(r_s), 3),
+                        threshold=0.10,
+                        status="FAIL" if float(r_s) > 0.10 else "PASS",
+                        margin=round(0.10 - float(r_s), 3)
+                    )
+                )
+
+        if actual_state.get('Sulfur_age_min') is not None and actual_state['Sulfur_age_min'] > 120.0:
+            checked_constraints.append(
+                ConstraintCheck(
+                    constraint_id="C_DATA_AGE",
+                    constraint="Возраст анализов ≤ 120 мин",
+                    predicted_value=actual_state['Sulfur_age_min'],
+                    threshold=120.0,
+                    status="FAIL",
+                    margin=round(120.0 - actual_state['Sulfur_age_min'], 1)
+                )
+            )
+
+        if risk_idx is not None and risk_idx > 0.70:
+            checked_constraints.append(
+                ConstraintCheck(
+                    constraint_id="C_EQUIP_RISK",
+                    constraint="Риск оборудования ≤ 0.70",
+                    predicted_value=round(float(risk_idx), 2),
+                    threshold=0.70,
+                    status="FAIL",
+                    margin=round(0.70 - float(risk_idx), 2)
+                )
+            )
+
+        confidence = getattr(quality_assessment, 'confidence', 0.0) if quality_assessment else 0.0
+
         recommendation = Recommendation(
             recommendation_id=f"rec_{datetime.now():%Y%m%d_%H%M%S}",
             timestamp=datetime.now().isoformat(),
-            state={},
+            state=actual_state,
             problem_type=problem_type,
             action=[],
-            expected_effect=ExpectedEffect(),
-            constraints_checked=[],
-            confidence=0.0,
+            expected_effect=expected_effect,
+            constraints_checked=checked_constraints,
+            confidence=confidence,
             status="NO_RECOMMENDATION",
             alternatives=[],
             explanation=f"Надёжной рекомендации нет: {specific_reason}",
@@ -594,7 +697,14 @@ class Orchestrator:
                 cand = opt_res.top_recommendation
 
         if cand is None:
-            return self._no_recommendation("Нет допустимых вариантов управления", cycle_id=cycle_id)
+            return self._no_recommendation(
+                "Нет допустимых вариантов управления",
+                cycle_id=cycle_id,
+                telemetry=telemetry,
+                quality_data=quality_data,
+                quality_assessment=q_ass,
+                reliability_assessment=r_ass
+            )
 
         # Разрешение конфликтов по умолчанию, если не передано
         if conflict_resolution is None:

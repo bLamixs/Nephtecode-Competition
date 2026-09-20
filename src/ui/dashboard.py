@@ -212,13 +212,14 @@ m_col1, m_col2, m_col3, m_col4 = st.columns(4)
 with m_col1:
     sulfur_age = rec.state.get('Sulfur_age_min', 0.0)
     sulfur_curr = rec.state.get('Sulfur_current', 0.0)
-    is_fresh = sulfur_age <= 120.0
-    fresh_badge = "СВЕЖИЙ" if is_fresh else "УСТАРЕЛ"
+    is_fresh = (sulfur_age <= 120.0) and (sulfur_age > 0.0)
+    fresh_badge = "СВЕЖИЙ" if is_fresh else ("УСТАРЕЛ" if sulfur_age > 120.0 else "НЕТ ДАННЫХ")
     delta_color = "normal" if is_fresh else "inverse"
+    age_str = f"{sulfur_age / 60:.1f} ч" if sulfur_age >= 180 else (f"{sulfur_age:.0f} мин" if sulfur_age > 0 else "Нет данных")
     st.metric(
         label=f"⏱️ Свежесть анализов ({fresh_badge})",
-        value=f"{sulfur_age:.0f} мин",
-        delta=f"Сера: {sulfur_curr:.1f} мг/кг" if sulfur_curr > 0 else "Нет данных",
+        value=age_str,
+        delta=f"Сера: {sulfur_curr:.1f} мг/кг" if sulfur_curr > 0 else "ПАК offline",
         delta_color=delta_color
     )
 
@@ -227,19 +228,31 @@ with m_col2:
     p_sulfur_risk = 0.0
     # Проверяем в проверенных ограничениях
     for c in rec.constraints_checked:
-        if 'P_S_gt_10' in c.constraint or 'Сера' in c.constraint:
-            p_sulfur_risk = c.predicted_value
+        c_name = getattr(c, 'constraint', '') if hasattr(c, 'constraint') else c.get('constraint', '')
+        c_val = getattr(c, 'predicted_value', 0.0) if hasattr(c, 'predicted_value') else c.get('predicted_value', 0.0)
+        if 'P_S_gt_10' in c_name or 'Сера' in c_name or 'P(S > 10)' in c_name:
+            p_sulfur_risk = 1.0 if c_val > 1.0 else c_val
             break
-    if p_sulfur_risk == 0.0 and rec.expected_effect.sulfur_60min:
-        p_sulfur_risk = max(0.01, min(0.99, (rec.expected_effect.sulfur_60min - 8.0) / 2.5))
+    if p_sulfur_risk == 0.0:
+        if rec.problem_type == "NO_DATA":
+            p_sulfur_risk = None
+        elif rec.state.get('Sulfur_current', 0.0) > 10.0:
+            p_sulfur_risk = 1.0
+        elif rec.expected_effect and rec.expected_effect.sulfur_60min:
+            p_sulfur_risk = max(0.01, min(0.99, (rec.expected_effect.sulfur_60min - 8.0) / 2.5))
+        elif rec.state.get('Sulfur_current', 0.0) > 0.0:
+            s_c = rec.state.get('Sulfur_current', 0.0)
+            p_sulfur_risk = max(0.01, min(0.99, (s_c - 8.0) / 2.5))
 
+    val_display = f"{p_sulfur_risk * 100:.1f}%" if p_sulfur_risk is not None else "Н/Д (Отказ)"
+    delta_display = "Лимит: 10.0 мг/кг" if p_sulfur_risk is not None else "Данные недостоверны"
     st.metric(
         label="🎯 Риск качества P(S > 10)",
-        value=f"{p_sulfur_risk * 100:.1f}%",
-        delta="Лимит: 10.0 мг/кг",
-        delta_color="inverse" if p_sulfur_risk > 0.15 else "normal"
+        value=val_display,
+        delta=delta_display,
+        delta_color="inverse" if (p_sulfur_risk is None or p_sulfur_risk > 0.15) else "normal"
     )
-    st.progress(float(np.clip(p_sulfur_risk, 0.0, 1.0)))
+    st.progress(float(np.clip(p_sulfur_risk if p_sulfur_risk is not None else 1.0, 0.0, 1.0)))
 
 # 3. Индекс риска оборудования
 with m_col3:
@@ -299,16 +312,8 @@ with tab_rec:
         col_act, col_eff = st.columns([3, 2])
 
         with col_act:
-            # Действие
-            st.write("**Действие:**")
-            action_items = list(recommendation.action.items()) if hasattr(recommendation.action, 'items') else []
-            for tag, change in action_items:
-                ch_from = change.get('from', getattr(change, 'from_value', 0.0)) if hasattr(change, 'get') else getattr(change, 'from_value', 0.0)
-                ch_to = change.get('to', getattr(change, 'to_value', 0.0)) if hasattr(change, 'get') else getattr(change, 'to_value', 0.0)
-                ch_unit = change.get('unit', getattr(change, 'unit', '')) if hasattr(change, 'get') else getattr(change, 'unit', '')
-                st.write(f"- {tag}: {ch_from} → {ch_to} {ch_unit}".strip())
-
             # Таблица действий с дельтами
+            st.write("**Действие:**")
             if recommendation.action:
                 actions_data = []
                 for a in recommendation.action:
@@ -328,13 +333,8 @@ with tab_rec:
                     })
                 st.dataframe(pd.DataFrame(actions_data), use_container_width=True, hide_index=True)
 
-            # Проверенные ограничения
+            # Проверенные ограничения (структурированная таблица)
             st.write("**Проверенные ограничения:**")
-            for c in recommendation.constraints_checked:
-                c_name = c.get('constraint', getattr(c, 'constraint', '')) if hasattr(c, 'get') else getattr(c, 'constraint', '')
-                c_status = c.get('status', getattr(c, 'status', '')) if hasattr(c, 'get') else getattr(c, 'status', '')
-                st.write(f"- {c_name}: {c_status}")
-
             if recommendation.constraints_checked:
                 cons_data = []
                 for c in recommendation.constraints_checked:
@@ -358,8 +358,6 @@ with tab_rec:
             ee = recommendation.expected_effect
             ee_s = ee['Sulfur_60min'] if hasattr(ee, '__getitem__') else getattr(ee, 'sulfur_60min', None)
             ee_tp = ee['throughput_change'] if hasattr(ee, '__getitem__') else getattr(ee, 'throughput_delta', None)
-            st.write(f"- Сера (60 мин): {ee_s} мг/кг")
-            st.write(f"- Выпуск: {ee_tp} т/ч")
 
             # Метрики
             eff_col1, eff_col2 = st.columns(2)
