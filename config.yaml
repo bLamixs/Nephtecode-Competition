@@ -1,0 +1,29 @@
+optimizer:
+  controlled_params:
+    T6:
+      current: 295.0
+      min: 290.0
+      max: 305.0
+      unit: "°C"
+      calibrated_current: 360.0
+      calibrated_min: 345.0
+      calibrated_max: 375.0
+    F2_F26_ratio:
+      current: 0.85
+      min: 0.80
+      max: 0.95
+      unit: "-"
+  weights:
+    throughput: 0.5
+    energy: 0.3
+    risk: 0.2
+
+quality:
+  risk_threshold: 0.1 # P(S>10) > 0.1 → veto
+  max_age_min: 120 # age_min > 120 → отказ
+
+reliability:
+  risk_class_thresholds:
+    low: 0.3
+    medium: 0.6
+    high: 1.0

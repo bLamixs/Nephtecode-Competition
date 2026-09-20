@@ -83,7 +83,7 @@ controlled_parameters:
     desc: "Расход сырья на установку (объемный)"
   P8:
     min: 0.1
-    max: 0.23
+    max: 0.26
     current: 0.17
     unit: "МПа"
     desc: "Давление в реакторе Р-202 на входе"

@@ -28,6 +28,109 @@ _TAG_DICT_CACHE: Optional[pd.DataFrame] = None
 _CONSTRAINTS_CACHE: Optional[Dict[str, Any]] = None
 
 
+def _convert_scalar(val_str: str) -> Any:
+    """Преобразование строкового скаляра в число, булево или строку."""
+    val_clean = val_str.strip('"').strip("'")
+    if val_clean.lower() in ('true', 'yes'):
+        return True
+    if val_clean.lower() in ('false', 'no'):
+        return False
+    if val_clean.lower() in ('null', 'none', '~'):
+        return None
+    try:
+        if '.' in val_clean or 'e' in val_clean.lower():
+            return float(val_clean)
+        return int(val_clean)
+    except ValueError:
+        return val_clean
+
+
+def _parse_simple_yaml(text: str) -> Dict[str, Any]:
+    """Простой легковесный парсер YAML для словарей и списков без внешних зависимостей."""
+    res = {}
+    stack = [(res, -1)]
+
+    for raw_line in text.splitlines():
+        line = raw_line.rstrip()
+        if not line or line.strip().startswith('#'):
+            continue
+
+        indent = len(line) - len(line.lstrip(' '))
+        stripped = line.strip()
+
+        while len(stack) > 1 and indent <= stack[-1][1]:
+            stack.pop()
+
+        current_dict, _ = stack[-1]
+
+        if stripped.startswith('- '):
+            # Элемент списка
+            val_str = stripped[2:].strip()
+            if '#' in val_str:
+                val_str = val_str.split('#', 1)[0].strip()
+            if isinstance(current_dict, list):
+                val = _convert_scalar(val_str)
+                current_dict.append(val)
+            continue
+
+        if ':' in stripped:
+            parts = stripped.split(':', 1)
+            key = parts[0].strip()
+            val_str = parts[1].strip()
+            if '#' in val_str:
+                val_str = val_str.split('#', 1)[0].strip()
+
+            if not val_str:
+                # Начало вложенного блока
+                new_container = {}
+                if isinstance(current_dict, dict):
+                    current_dict[key] = new_container
+                stack.append((new_container, indent))
+            else:
+                val = _convert_scalar(val_str)
+                if isinstance(current_dict, dict):
+                    current_dict[key] = val
+
+    return res
+
+
+# Совместимость с yaml и python-dotenv (INT-04)
+try:
+    import yaml
+except ImportError:
+    class _YamlFallback:
+        @staticmethod
+        def safe_load(stream):
+            if hasattr(stream, 'read'):
+                text = stream.read()
+            else:
+                text = str(stream)
+            return _parse_simple_yaml(text)
+    yaml = _YamlFallback()
+
+try:
+    from dotenv import load_dotenv
+except ImportError:
+    def load_dotenv(dotenv_path=None):
+        env_file = Path(dotenv_path) if dotenv_path else (PROJECT_ROOT / ".env")
+        if env_file.exists():
+            for line in env_file.read_text(encoding="utf-8").splitlines():
+                line = line.strip()
+                if line and not line.startswith("#") and "=" in line:
+                    k, v = line.split("=", 1)
+                    os.environ.setdefault(k.strip(), v.strip().strip("'\""))
+        return True
+
+# Загрузка переменных окружения и основного файла конфигурации config.yaml (INT-04)
+load_dotenv()
+
+CONFIG: Dict[str, Any] = {}
+_CONFIG_FILE = PROJECT_ROOT / "config.yaml"
+if _CONFIG_FILE.exists():
+    with open(_CONFIG_FILE, 'r', encoding='utf-8') as _f:
+        CONFIG = yaml.safe_load(_f)
+
+
 def load_tag_dict(path: Optional[str] = None, reload: bool = False) -> pd.DataFrame:
     """
     Загрузка справочника тегов со статистическими нормами и метаданными.
@@ -53,68 +156,6 @@ def load_tag_dict(path: Optional[str] = None, reload: bool = False) -> pd.DataFr
     _TAG_DICT_CACHE = df
     return _TAG_DICT_CACHE
 
-
-def _parse_simple_yaml(text: str) -> Dict[str, Any]:
-    """Простой легковесный парсер YAML для словарей и списков без внешних зависимостей."""
-    res = {}
-    stack = [(res, -1)]
-
-    for raw_line in text.splitlines():
-        line = raw_line.rstrip()
-        if not line or line.strip().startswith('#'):
-            continue
-
-        indent = len(line) - len(line.lstrip(' '))
-        stripped = line.strip()
-
-        while len(stack) > 1 and indent <= stack[-1][1]:
-            stack.pop()
-
-        current_dict, _ = stack[-1]
-
-        if stripped.startswith('- '):
-            # Элемент списка
-            val_str = stripped[2:].strip()
-            if isinstance(current_dict, list):
-                val = _convert_scalar(val_str)
-                current_dict.append(val)
-            continue
-
-        if ':' in stripped:
-            parts = stripped.split(':', 1)
-            key = parts[0].strip()
-            val_str = parts[1].strip()
-
-            if not val_str:
-                # Начало вложенного блока
-                # Смотрим следующую строку эвристически или создаем dict
-                new_container = {}
-                if isinstance(current_dict, dict):
-                    current_dict[key] = new_container
-                stack.append((new_container, indent))
-            else:
-                val = _convert_scalar(val_str)
-                if isinstance(current_dict, dict):
-                    current_dict[key] = val
-
-    return res
-
-
-def _convert_scalar(val_str: str) -> Any:
-    """Преобразование строкового скаляра в число, булево или строку."""
-    val_clean = val_str.strip('"').strip("'")
-    if val_clean.lower() in ('true', 'yes'):
-        return True
-    if val_clean.lower() in ('false', 'no'):
-        return False
-    if val_clean.lower() in ('null', 'none', '~'):
-        return None
-    try:
-        if '.' in val_clean or 'e' in val_clean.lower():
-            return float(val_clean)
-        return int(val_clean)
-    except ValueError:
-        return val_clean
 
 
 def load_constraints(path: Optional[str] = None, reload: bool = False) -> Dict[str, Any]:

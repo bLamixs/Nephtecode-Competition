@@ -42,7 +42,7 @@ manipulated_variables:
   P8:
     description: "Перепад давления на слое катализатора реактора Р-202"
     unit: "МПа"
-    default_range: [0.10, 0.23]
+    default_range: [0.10, 0.26]
   P24:
     description: "Давление циркулирующего водородсодержащего газа (ВСГ)"
     unit: "МПа"
