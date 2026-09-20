@@ -14,10 +14,6 @@ logs/*
 output/*
 !output/.gitkeep
 
-# Local tests (kept local for now)
-tests/*
-!tests/.gitkeep
-pytest.ini
 
 # System & Python cache
 .DS_Store
@@ -26,3 +22,5 @@ __pycache__/
 *.pyo
 .pytest_cache/
 .ipynb_checkpoints/
+.coverage
+htmlcov/

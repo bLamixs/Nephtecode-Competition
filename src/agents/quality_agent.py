@@ -52,6 +52,34 @@ class QualityAgent:
     def __init__(self, model_path: str = 'output/models/quality_lgbm.pkl'):
         self.model_path = model_path
         self.model = self._load_model(model_path) if os.path.exists(model_path) else None
+        self._train_data: Optional[pd.DataFrame] = None
+        self._test_data: Optional[pd.DataFrame] = None
+
+    @property
+    def train_data(self) -> pd.DataFrame:
+        """Обучающая выборка (до 2026 года) без утечек из будущего (Holdout)."""
+        if self._train_data is None:
+            train_path = Path('data/processed/train_data.csv')
+            if train_path.exists():
+                self._train_data = pd.read_csv(train_path, parse_dates=['date'])
+            else:
+                self._train_data = pd.DataFrame({
+                    'date': pd.date_range('2023-01-01', '2025-12-31', freq='1D')
+                })
+        return self._train_data
+
+    @property
+    def test_data(self) -> pd.DataFrame:
+        """Тестовая валидационная выборка (2026 год)."""
+        if self._test_data is None:
+            test_path = Path('data/processed/test_data.csv')
+            if test_path.exists():
+                self._test_data = pd.read_csv(test_path, parse_dates=['date'])
+            else:
+                self._test_data = pd.DataFrame({
+                    'date': pd.date_range('2026-01-01', '2026-12-31', freq='1D')
+                })
+        return self._test_data
 
     def _load_model(self, model_path: str):
         """Загрузка обученной модели из файла."""
@@ -447,7 +475,7 @@ class QualityAgent:
 
         return pd.concat([forecast, risk_df], axis=1)
 
-    async def assess(
+    def assess(
         self,
         telemetry: Any,
         quality_data: Optional[pd.DataFrame] = None

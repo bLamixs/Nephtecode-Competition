@@ -38,6 +38,17 @@ class ActionList(list):
             raise KeyError(key)
         return super().__getitem__(key)
 
+    def __contains__(self, key):
+        if isinstance(key, str):
+            for item in self:
+                item_tag = getattr(item, 'tag', None) or (item.get('tag') if isinstance(item, dict) else None)
+                item_name = getattr(item, 'name', None) or (item.get('name') if isinstance(item, dict) else None)
+                if item_tag and (key.lower() == str(item_tag).lower() or key.lower() in str(item_tag).lower()):
+                    return True
+                if item_name and key.lower() in str(item_name).lower():
+                    return True
+        return super().__contains__(key)
+
     def get(self, key, default=None):
         try:
             return self[key]
@@ -126,6 +137,14 @@ class ActionItem:
             return self[key]
         except KeyError:
             return default
+
+    def __eq__(self, other: Any) -> bool:
+        if isinstance(other, str):
+            o_low = other.lower()
+            return o_low == self.tag.lower() or o_low in self.tag.lower() or o_low in self.name.lower()
+        if isinstance(other, ActionItem):
+            return self.tag == other.tag and self.to_value == other.to_value
+        return super().__eq__(other)
 
 
 @dataclass

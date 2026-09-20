@@ -63,17 +63,22 @@ def detect_outliers_zscore(
         # Скользящее среднее и стандартное отклонение по времени
         rolling_obj = series.rolling(window=window, min_periods=1)
         r_mean = rolling_obj.mean()
-        r_std = rolling_obj.std().fillna(0.0)
+        r_std = rolling_obj.std().fillna(0.0).apply(lambda s: 1e-6 if s < 1e-6 else s)
+        z1 = (series - r_mean) / r_std
 
-        # Защита от деления на ноль при константных сигналах
-        r_std = r_std.apply(lambda s: 1e-6 if s < 1e-6 else s)
+        # Оценка относительно предшествующего окна (для коротких окон / спайков)
+        prior_obj = series.shift(1).rolling(window=window, min_periods=2)
+        p_mean = prior_obj.mean()
+        p_std = prior_obj.std()
+        valid_prior = p_std.notna() & (p_std >= 1e-6)
+        z2 = pd.Series(0.0, index=series.index)
+        z2[valid_prior] = (series[valid_prior] - p_mean[valid_prior]) / p_std[valid_prior]
 
-        # Локальный z-score
-        z_score = (series - r_mean) / r_std
+        # Итоговый z-score
+        z_score = np.maximum(z1.abs(), z2.abs())
 
         # Выброс: абсолютное значение z-score превышает порог
-        # NaN в исходных данных не считается z-выбросом (он будет обработан в маске)
-        is_outlier = (z_score.abs() > threshold) & series.notna()
+        is_outlier = (z_score > threshold) & series.notna()
         outliers_df[col] = is_outlier
 
     return outliers_df

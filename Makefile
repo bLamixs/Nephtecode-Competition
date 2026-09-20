@@ -1,4 +1,4 @@
-.PHONY: help run run-risk run-missing run-no-solution test dashboard
+.PHONY: help run run-risk run-missing run-no-solution test test-agents test-scenarios test-no-leak dashboard
 
 # Определение интерпретатора Python (предпочтительно venv, если есть)
 PYTHON ?= $(shell if [ -f "./venv/bin/python" ]; then echo "./venv/bin/python"; else echo "python3"; fi)
@@ -11,7 +11,10 @@ help:
 	@echo "  make run-risk         - Запуск сценария risk (Риск превышения серы)"
 	@echo "  make run-missing      - Запуск сценария missing (Сбой датчиков / устаревшие данные)"
 	@echo "  make run-no-solution  - Запуск сценария no-solution (Технологический тупик)"
-	@echo "  make test             - Запуск набора тестов pytest"
+	@echo "  make test             - Запуск тестов с отчётом о покрытии кода (HTML & term)"
+	@echo "  make test-agents      - Запуск тестов интерфейсов агентов (Tests-02)"
+	@echo "  make test-scenarios   - Запуск тестов 4 технологических сценариев (Tests-03)"
+	@echo "  make test-no-leak     - Запуск тестов отсутствия утечки данных и shuffle (Tests-04)"
 	@echo "  make dashboard        - Запуск веб-дашборда оператора"
 
 run:
@@ -27,7 +30,16 @@ run-no-solution:
 	$(PYTHON) src/main.py --scenario no_solution
 
 test:
-	$(PYTEST)
+	$(PYTEST) tests/ -v --cov=src --cov-report=html --cov-report=term
+
+test-agents:
+	$(PYTEST) tests/test_agents.py -v
+
+test-scenarios:
+	$(PYTEST) tests/test_scenarios.py -v
+
+test-no-leak:
+	$(PYTEST) tests/test_no_leak.py -v
 
 dashboard:
 	$(STREAMLIT) run src/ui/dashboard.py

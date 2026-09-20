@@ -85,6 +85,16 @@ def sync_telemetry_quality(
     if 'timestamp' not in quality.columns:
         raise ValueError("Таблица качества должна содержать колонку 'timestamp'!")
 
+    # Приведение quality к единому формату
+    quality = quality.copy()
+    quality['timestamp'] = pd.to_datetime(quality['timestamp'], utc=True)
+    if 'tag' not in quality.columns:
+        quality['tag'] = 'default_tag'
+    if 'value' not in quality.columns:
+        quality['value'] = 0.0
+    if 'source' not in quality.columns:
+        quality['source'] = 'LIMS'
+
     # Извлекаем временную сетку телеметрии
     timeline = pd.DataFrame({'date': pd.to_datetime(telemetry['date'], utc=True).drop_duplicates().sort_values()})
 
