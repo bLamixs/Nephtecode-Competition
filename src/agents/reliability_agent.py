@@ -77,12 +77,14 @@ class ReliabilityAgent:
                     if pd.notna(row.get('norm_std')) and tag not in self.norm_std:
                         self.norm_std[tag] = max(1e-4, float(row['norm_std']))
 
-                    # Также привязываем к raw_tag если отличается
+                    # Также привязываем к raw_tag если отличается (приоритет отдается контролируемым параметрам 24-2000)
                     if raw_tag and raw_tag != tag:
-                        if raw_tag not in self.norm_mean and tag in self.norm_mean:
-                            self.norm_mean[raw_tag] = self.norm_mean[tag]
-                        if raw_tag not in self.norm_std and tag in self.norm_std:
-                            self.norm_std[raw_tag] = self.norm_std[tag]
+                        is_ctrl = row.get('is_controlled') is True or str(row.get('is_controlled')).lower() == 'true'
+                        if (raw_tag not in self.norm_mean) or is_ctrl:
+                            if tag in self.norm_mean:
+                                self.norm_mean[raw_tag] = self.norm_mean[tag]
+                            if tag in self.norm_std:
+                                self.norm_std[raw_tag] = self.norm_std[tag]
 
                     # Границы для оптимизатора
                     c_min = row.get('controlled_min')
@@ -99,14 +101,14 @@ class ReliabilityAgent:
 
         # Дефолтные границы для ключевых регуляторов гидроочистки и АВТ
         defaults = {
-            'T6': {'min': 290.0, 'max': 305.0, 'desc': 'Температура в реакторе Р-201'},
-            'T6_hydro': {'min': 290.0, 'max': 305.0, 'desc': 'Температура в реакторе Р-201'},
-            'T55': {'min': 315.0, 'max': 330.0, 'desc': 'Температура на выходе из печи П-3'},
-            'F7': {'min': 80.0, 'max': 160.0, 'desc': 'Расход сырья 3-й ход'},
-            'F8': {'min': 80.0, 'max': 160.0, 'desc': 'Расход сырья 1-й ход'},
-            'F9': {'min': 225.0, 'max': 275.0, 'desc': 'Общий расход сырья'},
-            'F9_avt': {'min': 225.0, 'max': 275.0, 'desc': 'Общий расход сырья на гидроочистку'},
-            'P8': {'min': 25.0, 'max': 40.0, 'desc': 'Давление реактора Р-201'}
+            'T6': {'min': 345.0, 'max': 375.0, 'desc': 'Температура в реакторе Р-201'},
+            'T6_hydro': {'min': 345.0, 'max': 375.0, 'desc': 'Температура в реакторе Р-201'},
+            'T55': {'min': 375.0, 'max': 386.0, 'desc': 'Температура на выходе из печи П-3'},
+            'F7': {'min': 200.0, 'max': 310.0, 'desc': 'Расход сырья 3-й ход'},
+            'F8': {'min': 190.0, 'max': 325.0, 'desc': 'Расход сырья 1-й ход'},
+            'F9': {'min': 160.0, 'max': 280.0, 'desc': 'Общий расход сырья'},
+            'F9_avt': {'min': 160.0, 'max': 280.0, 'desc': 'Общий расход сырья на гидроочистку'},
+            'P8': {'min': 0.10, 'max': 0.23, 'desc': 'Давление реактора Р-201'}
         }
         for k, v in defaults.items():
             if k not in self.controlled_bounds:
@@ -136,9 +138,13 @@ class ReliabilityAgent:
                 continue
 
             # Ищем базовый тег без суффиксов установки
-            base_tag = col.split('_')[0]
-            mean_val = self.norm_mean.get(col, self.norm_mean.get(base_tag))
-            std_val = self.norm_std.get(col, self.norm_std.get(base_tag))
+            if 'ratio' in col:
+                mean_val = None
+                std_val = None
+            else:
+                base_tag = col.split('_')[0]
+                mean_val = self.norm_mean.get(col, self.norm_mean.get(base_tag))
+                std_val = self.norm_std.get(col, self.norm_std.get(base_tag))
 
             if mean_val is None or std_val is None:
                 # Если в справочнике нет, используем статистику самой серии
@@ -294,7 +300,7 @@ class ReliabilityAgent:
     def _get_constraints_for_optimizer(self) -> List[Dict[str, Any]]:
         """
         Формирование списка технологических коридоров для Optimizer Agent.
-        Формат: [{"tag": "T6", "min": 290.0, "max": 305.0}, ...]
+        Формат: [{"tag": "T6", "min": 345.0, "max": 375.0}, ...]
         """
         constraints = []
         for tag, bounds in self.controlled_bounds.items():

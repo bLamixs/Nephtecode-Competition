@@ -325,7 +325,7 @@ class QualityAgent:
             shift_flash = max(0, int((lags['flash'] - horizon) / step_min))
             telem_flash = telemetry.shift(shift_flash).bfill() if shift_flash > 0 else telemetry
             t6_series = self._get_tag_series(telem_flash, 'T6')
-            pred_flash = np.clip(68.0 - 0.15 * (t6_series.values - 295.0), 45.0, 90.0)
+            pred_flash = np.clip(68.0 - 0.15 * (t6_series.values - 360.0), 45.0, 90.0)
 
             df_h = pd.DataFrame({
                 'date': dates.values,
@@ -466,8 +466,8 @@ class QualityAgent:
         t95_series = vac_t95_godt(telemetry)
         cfpp_series = vac_cfpp_godt(telemetry)
         t6_series = self._get_tag_series(telemetry, 'T6')
-        latest_t6 = float(t6_series.iloc[-1]) if len(t6_series) > 0 else 295.0
-        latest_flash = float(np.clip(68.0 - 0.15 * (latest_t6 - 295.0), 45.0, 90.0))
+        latest_t6 = float(t6_series.iloc[-1]) if len(t6_series) > 0 else 360.0
+        latest_flash = float(np.clip(68.0 - 0.15 * (latest_t6 - 360.0), 45.0, 90.0))
 
         latest_d15 = float(d15_series.iloc[-1]) if len(d15_series) > 0 else 835.0
         latest_t50 = float(t50_series.iloc[-1]) if len(t50_series) > 0 else 280.0
