@@ -854,15 +854,15 @@ class Orchestrator:
         t6_act = next((a for a in actions if a.tag == 'T6'), None)
         if t6_act and abs(t6_act.delta) > 0.05:
             direction = "Повышение" if t6_act.delta > 0 else "Снижение"
-            lead_explanation = f"{direction} {t6_act.tag} на {abs(t6_act.delta):.1f}°C (до {t6_act.to_value:.1f}°C) изменит серу с {sulfur_curr:.1f} до {s_60:.1f} мг/кг."
+            lead_explanation = f"{direction} температуры T6 на {abs(t6_act.delta):.1f}°C (до {t6_act.to_value:.1f}°C) обеспечивает прогноз серы {s_60:.1f} мг/кг."
         else:
-            lead_explanation = f"Режим сбалансирован по качеству (сера={s_60:.2f} мг/кг)."
+            lead_explanation = f"Текущий режим сбалансирован по качеству (сера {s_60:.1f} мг/кг)."
 
+        tp_str = f"рост выработки на {throughput_delta:+.1f} м³/ч" if throughput_delta > 0.5 else f"стабильный расход ({throughput:.1f} м³/ч)"
         explanation = (
-            f"{lead_explanation} Рекомендовано: {action_str}. "
-            f"Производительность: {throughput:.1f} м³/ч (Δ={throughput_delta:+.1f} м³/ч). "
-            f"Индекс риска оборудования: {risk_idx:.2f} ({rel_class}). "
-            f"Выбран вариант как компромисс между качеством, производительностью и ресурсом оборудования."
+            f"{lead_explanation} "
+            f"Решение обеспечивает {tp_str} при безопасном риске оборудования ({risk_idx:.2f}, {rel_class}). "
+            f"Выбран оптимальный компромисс между качеством, производительностью и ресурсом катализатора."
         )
 
         conf = getattr(q_ass, 'confidence', getattr(quality_assessment, 'confidence', 0.85))
@@ -944,7 +944,43 @@ class Orchestrator:
         with open(rec_path, 'w', encoding='utf-8') as f:
             json.dump(rec_dict, f, ensure_ascii=False, indent=2, default=str)
 
-        # 3. Логирование в orchestrator.log
+        # 3. Сохранение в SQLite базу данных (recommendations)
+        try:
+            import sqlite3
+            db_path = self.output_dir / 'recommendations.db'
+            with sqlite3.connect(db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS recommendations (
+                        recommendation_id TEXT PRIMARY KEY,
+                        cycle_id TEXT,
+                        timestamp TEXT,
+                        status TEXT,
+                        problem_type TEXT,
+                        confidence REAL,
+                        explanation TEXT,
+                        payload_json TEXT
+                    )
+                """)
+                cursor.execute("""
+                    INSERT OR REPLACE INTO recommendations 
+                    (recommendation_id, cycle_id, timestamp, status, problem_type, confidence, explanation, payload_json)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    recommendation.recommendation_id,
+                    cycle_id,
+                    recommendation.timestamp,
+                    recommendation.status,
+                    recommendation.problem_type,
+                    recommendation.confidence,
+                    recommendation.explanation,
+                    json.dumps(rec_dict, ensure_ascii=False, default=str)
+                ))
+                conn.commit()
+        except Exception as e:
+            logger.warning(f"Ошибка сохранения рекомендации в SQLite: {e}")
+
+        # 4. Логирование в orchestrator.log
         if recommendation.status == "RECOMMENDED":
             logger.info(
                 f"RECOMMENDATION: {recommendation.recommendation_id}, "
