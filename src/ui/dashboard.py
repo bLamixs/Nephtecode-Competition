@@ -460,23 +460,29 @@ with tab_telemetry:
 
     n_rows = len(plot_df)
 
-    # Синхронизация тренда серы в зависимости от выбранного сценария
+    # Синхронизация тренда серы и давления P8 в зависимости от выбранного сценария
     if selected_scenario == 'risk':
         # Плавный рост серы от нормы 7.2 до 9.8 мг/кг в конце интервала
         s_baseline = np.linspace(7.2, 9.8, n_rows) + np.random.normal(0, 0.15, n_rows)
+        p_baseline = np.linspace(0.18, 0.23, n_rows) + np.random.normal(0, 0.005, n_rows)
     elif selected_scenario == 'no_solution':
-        # Стабильно превышенная сера
+        # Стабильно превышенная сера и критическое давление выше предела 0.26 МПа
         s_baseline = np.random.normal(11.4, 0.15, n_rows)
+        p_baseline = np.random.normal(0.278, 0.005, n_rows)
     elif selected_scenario == 'missing':
         # Сбой датчиков в конце: последние 25% точек отсутствуют (NaN)
         s_baseline = np.random.normal(7.8, 0.2, n_rows)
+        p_baseline = np.random.normal(0.175, 0.012, n_rows)
         cut_idx = int(n_rows * 0.75)
         s_baseline[cut_idx:] = np.nan
+        p_baseline[cut_idx:] = np.nan
     else:
-        # Штатный режим: сера в норме 6.8 мг/кг
+        # Штатный режим: сера в норме 6.8 мг/кг, давление в оптимуме 0.17-0.19 МПа
         s_baseline = np.random.normal(6.8, 0.25, n_rows)
+        p_baseline = np.random.normal(0.178, 0.012, n_rows)
 
     plot_df['Sulfur'] = s_baseline
+    plot_df['P8'] = p_baseline
 
     col_g1, col_g2 = st.columns(2)
 
@@ -601,18 +607,22 @@ with tab_telemetry:
         # 4. График давления реактора P8
         fig_p = go.Figure()
         fig_p.add_hrect(
-            y0=0.10, y1=0.23,
+            y0=0.10, y1=0.25,
             fillcolor="rgba(16, 185, 129, 0.08)",
             line_width=0,
             layer="below"
         )
+        fig_p.add_hline(y=0.26, line_dash='dash', line_color='#EF4444', annotation_text='Предел 0.26 МПа')
+        fig_p.add_hline(y=0.25, line_dash='dot', line_color='#F59E0B', annotation_text='Макс. 0.25 МПа')
+        fig_p.add_hline(y=0.10, line_dash='dot', line_color='#F59E0B', annotation_text='Мин. 0.10 МПа')
+
         if 'P8' in plot_df.columns:
             raw_p = plot_df['P8'].values
             # Коррекция устаревших шкал (> 5.0 кгс/см² -> МПа)
             raw_p = np.where(raw_p > 5.0, raw_p / 100.0, raw_p)
             p_vals = np.clip(raw_p, 0.05, 0.35)
         else:
-            p_vals = np.random.normal(0.17, 0.015, n_rows)
+            p_vals = np.random.normal(0.175, 0.012, n_rows)
 
         fig_p.add_trace(go.Scatter(
             x=plot_df['date'],
