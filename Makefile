@@ -1,4 +1,4 @@
-.PHONY: help run run-risk run-missing run-no-solution test test-agents test-scenarios test-no-leak dashboard
+.PHONY: help run run-risk run-missing run-no-solution test test-agents test-scenarios test-no-leak dashboard db-init load-data README
 
 # Определение интерпретатора Python (предпочтительно venv, если есть)
 PYTHON ?= $(shell if [ -f "./venv/bin/python" ]; then echo "./venv/bin/python"; else echo "python3"; fi)
@@ -16,6 +16,18 @@ help:
 	@echo "  make test-scenarios   - Запуск тестов 4 технологических сценариев (Tests-03)"
 	@echo "  make test-no-leak     - Запуск тестов отсутствия утечки данных и shuffle (Tests-04)"
 	@echo "  make dashboard        - Запуск веб-дашборда оператора"
+	@echo "  make db-init          - Инициализация схемы базы данных"
+	@echo "  make load-data        - Первичная загрузка и конвертация данных в Parquet"
+	@echo "  make README           - Вывод ссылки на README"
+
+README:
+	@echo "См. README.md"
+
+db-init:
+	$(PYTHON) -c "import sqlite3; con = sqlite3.connect('output/recommendations.db'); con.execute('CREATE TABLE IF NOT EXISTS recommendations (recommendation_id TEXT PRIMARY KEY, cycle_id TEXT, timestamp TEXT, status TEXT, problem_type TEXT, confidence REAL, explanation TEXT, payload_json TEXT)'); con.close(); print('База данных успешно инициализирована.')"
+
+load-data:
+	$(PYTHON) scripts/load_raw_data.py --avt data/raw/avt_tags.csv --hydro data/raw/242000_tags.csv --output data/processed/
 
 run:
 	$(PYTHON) src/main.py --scenario normal
