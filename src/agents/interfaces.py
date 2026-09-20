@@ -20,6 +20,30 @@
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Any
 from datetime import datetime
+import pandas as pd
+
+
+@dataclass
+class AgentRequest:
+    """
+    Единый контракт запроса от Orchestrator к агентам (QualityAgent, ReliabilityAgent, OptimizationAgent).
+
+    Содержит:
+    - timestamp: временная метка текущего цикла
+    - scenario: идентификатор сценария ("normal", "risk", "missing", "no_solution")
+    - telemetry: срез технологических параметров за последний период (T6, F9, P_diff, etc.)
+    - quality: данные анализов качества (LIMS / PAK / VAC)
+    - features: предварительно рассчитанный feature store (опционально)
+    - constraints: список актуальных технологических ограничений
+    - metadata: дополнительные атрибуты цикла
+    """
+    timestamp: datetime = field(default_factory=datetime.now)
+    scenario: str = "normal"
+    telemetry: pd.DataFrame = field(default_factory=pd.DataFrame)
+    quality: pd.DataFrame = field(default_factory=pd.DataFrame)
+    features: Optional[pd.DataFrame] = None
+    constraints: List[Dict[str, Any]] = field(default_factory=list)
+    metadata: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass

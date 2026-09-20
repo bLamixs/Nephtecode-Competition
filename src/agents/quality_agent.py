@@ -449,13 +449,19 @@ class QualityAgent:
 
     async def assess(
         self,
-        telemetry: pd.DataFrame,
+        telemetry: Any,
         quality_data: Optional[pd.DataFrame] = None
     ) -> QualityAssessment:
         """
         Контрактный метод для вызова Оркестратором (src/orchestrator/orchestrator.py).
+        Поддерживает как AgentRequest, так и pd.DataFrame.
         Возвращает структурированный dataclass QualityAssessment.
         """
+        if hasattr(telemetry, 'telemetry'):
+            req = telemetry
+            telemetry = req.telemetry
+            quality_data = getattr(req, 'quality', quality_data)
+
         # 1. Расчёт прогноза серы
         pred_sulfur_series = self._predict_sulfur(telemetry, quality_data)
         latest_sulfur = float(pred_sulfur_series.iloc[-1]) if len(pred_sulfur_series) > 0 else 8.5

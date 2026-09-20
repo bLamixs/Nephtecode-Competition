@@ -17,6 +17,7 @@ import numpy as np
 import pandas as pd
 from pathlib import Path
 
+from src.agents.interfaces import AgentRequest
 from src.agents.quality_agent import QualityAgent
 from src.agents.reliability_agent import ReliabilityAgent
 from src.agents.optimization_agent import OptimizationAgent, ScoredCandidate
@@ -318,20 +319,28 @@ class Orchestrator:
             logger.warning(f"Предупреждения: {validation_result.warnings}")
 
         # ====================================================================
-        # ШАГ 2: Запрос агентов
+        # ШАГ 2: Запрос агентов через AgentRequest
         # ====================================================================
 
-        logger.info("Шаг 2: Запрос агентов")
+        logger.info("Шаг 2: Запрос агентов через AgentRequest")
 
         try:
-            quality_assessment = await self._call_quality_agent(telemetry, quality_data)
+            agent_request = AgentRequest(
+                timestamp=datetime.now(),
+                scenario=str(scenario),
+                telemetry=telemetry,
+                quality=quality_data,
+                constraints=validation_result.warnings if validation_result else []
+            )
+
+            quality_assessment = await self._call_quality_agent(agent_request)
             logger.info(f"Качество: confidence={quality_assessment.confidence:.3f}")
 
-            reliability_assessment = await self._call_reliability_agent(telemetry)
+            reliability_assessment = await self._call_reliability_agent(agent_request)
             logger.info(f"Надёжность: risk_class={reliability_assessment.risk_class}")
 
             optimization_result = await self._call_optimization_agent(
-                telemetry,
+                agent_request,
                 quality_assessment,
                 reliability_assessment
             )
@@ -793,26 +802,51 @@ class Orchestrator:
 
         logger.debug(f"Рекомендация сохранена: {rec_path}")
 
-    async def _call_quality_agent(self, telemetry: pd.DataFrame, quality_data: pd.DataFrame):
-        """Вызов Quality Agent."""
-        return await self.quality_agent.assess(telemetry, quality_data)
+    async def _call_quality_agent(
+        self,
+        request: Any,
+        quality_data: Optional[pd.DataFrame] = None
+    ):
+        """
+        Вызов Quality Agent через единый протокол AgentRequest.
+        """
+        if not isinstance(request, AgentRequest):
+            request = AgentRequest(
+                timestamp=datetime.now(),
+                telemetry=request,
+                quality=quality_data if quality_data is not None else pd.DataFrame()
+            )
+        return await self.quality_agent.assess(request)
 
-    async def _call_reliability_agent(self, telemetry: pd.DataFrame):
-        """Вызов Reliability Agent."""
-        return await self.reliability_agent.assess(telemetry)
+    async def _call_reliability_agent(
+        self,
+        request: Any
+    ):
+        """
+        Вызов Reliability Agent через единый протокол AgentRequest.
+        """
+        if not isinstance(request, AgentRequest):
+            request = AgentRequest(
+                timestamp=datetime.now(),
+                telemetry=request
+            )
+        return await self.reliability_agent.assess(request)
 
     async def _call_optimization_agent(
         self,
-        telemetry: pd.DataFrame,
+        request: Any,
         quality_assessment: Any,
         reliability_assessment: Any
     ):
-        """Вызов Optimization Agent."""
+        """
+        Вызов Optimization Agent через единый протокол AgentRequest.
+        """
+        telemetry = request.telemetry if isinstance(request, AgentRequest) else request
         current_state = {
-            'T6': float(telemetry['T6'].iloc[-1]) if 'T6' in telemetry else 360.0,
-            'F2_F26_ratio': float(telemetry['F2_F26_ratio'].iloc[-1]) if 'F2_F26_ratio' in telemetry else 0.85,
-            'T55': float(telemetry['T55'].iloc[-1]) if 'T55' in telemetry else 380.0,
-            'F9': float(telemetry['F9'].iloc[-1]) if 'F9' in telemetry else 215.0,
+            'T6': float(telemetry['T6'].dropna().iloc[-1]) if 'T6' in telemetry and not telemetry['T6'].dropna().empty else 360.0,
+            'F2_F26_ratio': float(telemetry['F2_F26_ratio'].dropna().iloc[-1]) if 'F2_F26_ratio' in telemetry and not telemetry['F2_F26_ratio'].dropna().empty else 0.85,
+            'T55': float(telemetry['T55'].dropna().iloc[-1]) if 'T55' in telemetry and not telemetry['T55'].dropna().empty else 380.0,
+            'F9': float(telemetry['F9'].dropna().iloc[-1]) if 'F9' in telemetry and not telemetry['F9'].dropna().empty else 215.0,
         }
 
         return self.optimization_agent.optimize(
@@ -820,6 +854,11 @@ class Orchestrator:
             quality_assessment=quality_assessment,
             reliability_assessment=reliability_assessment
         )
+
+    # Публичные алиасы для вызова агентов по контракту Orchestrator
+    call_quality_agent = _call_quality_agent
+    call_reliability_agent = _call_reliability_agent
+    call_optimization_agent = _call_optimization_agent
 
 
 # ============================================================================
