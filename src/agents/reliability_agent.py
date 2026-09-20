@@ -383,10 +383,12 @@ class ReliabilityAgent:
             assumptions=assumptions
         )
 
-    async def assess(self, telemetry: Any) -> ReliabilityAssessment:
+    def assess(self, telemetry: Any) -> ReliabilityAssessment:
         """
-        Асинхронный интерфейс для вызова Оркестратором (await self.reliability_agent.assess(request)).
+        Интерфейс для вызова Оркестратором (await self.reliability_agent.assess(request))
+        или напрямую в тестах (self.reliability_agent.assess(df)).
         Поддерживает как AgentRequest, так и pd.DataFrame.
+        Возвращаемый ReliabilityAssessment поддерживает __await__.
         """
         if hasattr(telemetry, 'telemetry'):
             telemetry = telemetry.telemetry

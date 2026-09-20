@@ -122,6 +122,11 @@ class QualityAssessment:
         from dataclasses import asdict
         return asdict(self)
 
+    def __await__(self):
+        async def _ret():
+            return self
+        return _ret().__await__()
+
 
 @dataclass
 class ReliabilityAssessment:
@@ -154,6 +159,11 @@ class ReliabilityAssessment:
     def to_dict(self) -> Dict[str, Any]:
         from dataclasses import asdict
         return asdict(self)
+
+    def __await__(self):
+        async def _ret():
+            return self
+        return _ret().__await__()
 
 
 @dataclass
@@ -234,6 +244,11 @@ class OptimizationResult:
                 'valid_candidates_count': self.valid_candidates_count,
                 'refusal_reason': self.refusal_reason
             }
+
+    def __await__(self):
+        async def _ret():
+            return self
+        return _ret().__await__()
 
 
 @dataclass

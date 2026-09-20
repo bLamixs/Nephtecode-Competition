@@ -93,6 +93,11 @@ class OptimizationResult:
         """Поддержка распаковки: recommended, alternatives = opt_result"""
         return iter((self.recommended, self.alternatives))
 
+    def __await__(self):
+        async def _ret():
+            return self
+        return _ret().__await__()
+
 
 # ============================================================================
 # КОНФИГУРАЦИЯ
@@ -761,7 +766,7 @@ class OptimizationAgent:
 
     def optimize(
         self,
-        current_state: Dict[str, float],
+        current_state: Union[Dict[str, float], pd.DataFrame],
         quality_assessment: Optional[Dict[str, Any]] = None,
         reliability_assessment: Optional[Dict[str, Any]] = None
     ) -> OptimizationResult:
@@ -769,7 +774,7 @@ class OptimizationAgent:
         Основной метод оптимизации.
 
         Args:
-            current_state: текущее состояние
+            current_state: текущее состояние (словарь или строка/DataFrame телеметрии)
             quality_assessment: оценка качества
             reliability_assessment: оценка надёжности
 
@@ -777,6 +782,16 @@ class OptimizationAgent:
             OptimizationResult
         """
         logger.info("Запуск оптимизации")
+
+        if isinstance(current_state, pd.DataFrame):
+            if not current_state.empty:
+                row = current_state.iloc[-1]
+                current_state = {
+                    str(k): float(v) for k, v in row.items()
+                    if pd.notna(v) and isinstance(v, (int, float, np.number))
+                }
+            else:
+                current_state = {}
 
         # 1. Генерация кандидатов
         candidates = self.generate_candidates(

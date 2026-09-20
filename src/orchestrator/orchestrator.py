@@ -638,8 +638,8 @@ class Orchestrator:
             return f"Критические теги содержат пропуски > 30% ({reason})"
         elif 'согласованность' in r_low or 'consistency' in r_low or 'противореч' in r_low:
             return f"ЛИМС и ПАК противоречат друг другу (разница > 20%) ({reason})"
-        elif 'нет допустим' in r_low or 'no_feasible' in r_low or 'тупик' in r_low:
-            return f"Все варианты нарушают жёсткие ограничения (сера ≤ 10 мг/кг, баланс долей = 100%)"
+        elif 'нет допустим' in r_low or 'no_feasible' in r_low or 'тупик' in r_low or 'no_solution' in r_low or 'недопустимый риск' in r_low:
+            return f"Нет допустимого решения: все варианты нарушают технологические ограничения ({reason})"
         else:
             return reason
 
