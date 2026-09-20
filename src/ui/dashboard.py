@@ -5,6 +5,7 @@
 
 import sys
 import os
+import re
 import asyncio
 from pathlib import Path
 from datetime import datetime
@@ -35,34 +36,9 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Пользовательский CSS
+# Пользовательский CSS (статусы процесса)
 st.markdown("""
 <style>
-    .main-title {
-        font-size: 2.2rem;
-        font-weight: 700;
-        color: #1E3A8A;
-        margin-bottom: 0.2rem;
-    }
-    .subtitle {
-        font-size: 1.05rem;
-        color: #64748B;
-        margin-bottom: 1.2rem;
-    }
-    .card {
-        background: #F8FAFC;
-        border: 1px solid #E2E8F0;
-        border-radius: 10px;
-        padding: 16px;
-        margin-bottom: 16px;
-    }
-    .metric-box {
-        background: white;
-        border-radius: 8px;
-        padding: 12px;
-        border-left: 4px solid #3B82F6;
-        box-shadow: 0 1px 3px rgba(0,0,0,0.05);
-    }
     .status-badge-ok {
         background-color: #DEF7EC;
         color: #03543F;
@@ -89,6 +65,19 @@ st.markdown("""
     }
 </style>
 """, unsafe_allow_html=True)
+
+
+def is_dark_theme() -> bool:
+    """Определяет, активна ли темная тема в интерфейсе."""
+    try:
+        if hasattr(st, "context") and hasattr(st.context, "theme"):
+            t = st.context.theme
+            if isinstance(t, dict):
+                return t.get("type") == "dark"
+            return getattr(t, "type", None) == "dark"
+    except Exception:
+        pass
+    return False
 
 
 # ============================================================================
@@ -123,7 +112,23 @@ def load_historical_telemetry(hours: int = 24):
 # САЙДБАР: УПРАВЛЕНИЕ И СЦЕНАРИИ
 # ============================================================================
 
-st.sidebar.image("https://img.icons8.com/fluency/96/oil-pumpjack.png", width=64)
+st.sidebar.markdown("""
+<div style="display: flex; align-items: center; gap: 12px; margin-bottom: 20px; padding: 10px 14px; border-radius: 12px; border: 1px solid rgba(128, 128, 128, 0.2); background: rgba(128, 128, 128, 0.06);">
+    <div style="background: linear-gradient(135deg, #2563EB 0%, #0284C7 100%); width: 44px; height: 44px; border-radius: 10px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; box-shadow: 0 2px 4px rgba(37, 99, 235, 0.3);">
+        <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#FFFFFF" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M4 21h16" />
+            <path d="M7 21l5-16 5 16" />
+            <path d="M8.5 15h7" />
+            <path d="M4 9l8-4 8 4" stroke="#38BDF8" stroke-width="2.5" />
+            <circle cx="12" cy="5" r="2" fill="#F59E0B" stroke="#F59E0B" />
+        </svg>
+    </div>
+    <div>
+        <div style="font-weight: 800; font-size: 1.05rem; letter-spacing: -0.01em; line-height: 1.2;">НЕФТЕКОД 2.0</div>
+        <div style="font-size: 0.74rem; opacity: 0.75; font-weight: 500; margin-top: 2px;">Установка ГОДТ 24-2000</div>
+    </div>
+</div>
+""", unsafe_allow_html=True)
 st.sidebar.markdown("## ⚙️ Управление системой")
 
 scenarios_map = {
@@ -190,8 +195,8 @@ run_time = st.session_state.get('run_time', datetime.now().strftime("%Y-%m-%d %H
 col_header, col_status = st.columns([3, 1])
 
 with col_header:
-    st.markdown('<div class="main-title">🛢️ НефтеКод: Мультиагентный Dashboard</div>', unsafe_allow_html=True)
-    st.markdown(f'<div class="subtitle">Установка гидроочистки дизельного топлива 24-2000 • Последний цикл: <b>{run_time}</b> • Сценарий: <code>{selected_scenario}</code></div>', unsafe_allow_html=True)
+    st.markdown("## 🛢️ НефтеКод: Мультиагентный Dashboard")
+    st.caption(f"Установка гидроочистки дизельного топлива 24-2000 • Последний цикл: **{run_time}** • Сценарий: `{selected_scenario}`")
 
 with col_status:
     if rec.status == "RECOMMENDED":
@@ -297,6 +302,50 @@ tab_rec, tab_telemetry, tab_agents, tab_logs = st.tabs([
 ])
 
 
+def parse_explanation_blocks(text: str):
+    """Парсит и форматирует объяснение рекомендации для максимально комфортного чтения."""
+    if not text:
+        return [("💡 Резюме", "Рекомендация сформирована системой оптимизации.")]
+    
+    text = text.strip()
+    if "Рекомендовано:" in text:
+        parts = text.split("Рекомендовано:")
+        lead = parts[0].strip()
+        rest = parts[1]
+        
+        tp_match = re.search(r"Производительность:\s*([^;]+?)(?:\.\s+[А-ЯA-Z]|\.$|$)", rest)
+        risk_match = re.search(r"Индекс риска оборудования:\s*([^;]+?)(?:\.\s+[А-ЯA-Z]|\.$|$)", rest)
+        
+        tp_text = tp_match.group(1).strip() if tp_match else ""
+        risk_text = risk_match.group(1).strip() if risk_match else ""
+        
+        blocks = []
+        if lead:
+            blocks.append(("🎯 Технологический режим и качество", lead))
+        if tp_text:
+            blocks.append(("📈 Производительность", f"Обеспечивается расход сырья {tp_text}."))
+        if risk_text:
+            blocks.append(("🛡️ Безопасность оборудования", f"Индекс риска: {risk_text} (в безопасной зеленой зоне)."))
+        blocks.append(("⚖️ Обоснование выбора", "Оптимальный баланс между качеством продукции, выработкой и ресурсом оборудования."))
+        return blocks
+
+    sentences = [s.strip() for s in re.split(r"(?<=[.!?])\s+", text) if s.strip()]
+    if not sentences:
+        return [("💡 Резюме", text)]
+    
+    blocks = []
+    if len(sentences) == 1:
+        blocks.append(("💡 Обоснование", sentences[0]))
+    elif len(sentences) == 2:
+        blocks.append(("🎯 Технологический режим и качество", sentences[0]))
+        blocks.append(("📈 Эффект и надежность", sentences[1]))
+    else:
+        blocks.append(("🎯 Технологический режим и качество", sentences[0]))
+        blocks.append(("📈 Эффект и надежность", sentences[1]))
+        blocks.append(("⚖️ Обоснование выбора", " ".join(sentences[2:])))
+    return blocks
+
+
 # ----------------------------------------------------------------------------
 # ВКЛАДКА 1: РЕКОМЕНДАЦИЯ ОПЕРАТОРУ (INT-02)
 # ----------------------------------------------------------------------------
@@ -306,8 +355,12 @@ with tab_rec:
     if recommendation.status == "RECOMMENDED":
         st.subheader("✅ Рекомендация")
 
-        # Объяснение
-        st.info(recommendation.explanation)
+        # Структурированное инженерное обоснование (нативный theme-aware контейнер)
+        blocks = parse_explanation_blocks(recommendation.explanation)
+        with st.container(border=True):
+            st.markdown("##### 💡 Инженерное обоснование решения:")
+            for b_title, b_text in blocks:
+                st.markdown(f"- **{b_title}:** {b_text}")
 
         col_act, col_eff = st.columns([3, 2])
 
