@@ -114,6 +114,14 @@ class QualityAssessment:
     def get(self, key: str, default: Any = None) -> Any:
         return getattr(self, key, default)
 
+    @property
+    def dict(self) -> Dict[str, Any]:
+        return self.to_dict()
+
+    def to_dict(self) -> Dict[str, Any]:
+        from dataclasses import asdict
+        return asdict(self)
+
 
 @dataclass
 class ReliabilityAssessment:
@@ -138,6 +146,14 @@ class ReliabilityAssessment:
 
     def get(self, key: str, default: Any = None) -> Any:
         return getattr(self, key, default)
+
+    @property
+    def dict(self) -> Dict[str, Any]:
+        return self.to_dict()
+
+    def to_dict(self) -> Dict[str, Any]:
+        from dataclasses import asdict
+        return asdict(self)
 
 
 @dataclass
@@ -200,6 +216,24 @@ class OptimizationResult:
     def __iter__(self):
         """Поддержка распаковки: recommended, alternatives = opt_result"""
         return iter((self.recommended, self.alternatives))
+
+    @property
+    def dict(self) -> Dict[str, Any]:
+        return self.to_dict()
+
+    def to_dict(self) -> Dict[str, Any]:
+        from dataclasses import asdict
+        try:
+            return asdict(self)
+        except Exception:
+            return {
+                'timestamp': str(self.timestamp),
+                'metrics': self.metrics,
+                'is_solution_found': self.is_solution_found,
+                'evaluated_candidates_count': self.evaluated_candidates_count,
+                'valid_candidates_count': self.valid_candidates_count,
+                'refusal_reason': self.refusal_reason
+            }
 
 
 @dataclass

@@ -1,54 +1,56 @@
 """
 Модуль: src/utils/logging_config.py
-Назначение: Настройка структурированного логирования для воспроизводимости и аудита решений МАС.
-
-Контекст задачи:
-В соответствии с требованиями ТЗ «НефтеКод», мультиагентная система обязана сохранять
-и протоколировать:
-1. Входное состояние процесса (телеметрия, возраст анализов ЛИМС/ПАК).
-2. Оценки всех агентов (качество, надежность, альтернативы оптимизатора).
-3. Принятые решения или причины отказа от рекомендации («Надёжной рекомендации нет»).
-
-Данный модуль обеспечивает единую точку конфигурации логгеров, выводящих
-сообщения одновременно в стандартный поток вывода (консоль оператора) и в файл журнала logs/system.log.
+Назначение: Настройка структурированного JSON и консольного логирования для аудита решений МАС (INT-03).
 """
 
 import logging
+import json
 import sys
+from datetime import datetime
 from pathlib import Path
 
 
 def setup_logger(name: str = "neftecode_mas", log_dir: str = "logs") -> logging.Logger:
     """
-    Создает и настраивает потокобезопасный логгер с форматированием даты и уровней логирования.
-
-    Параметры:
-        name (str): Имя логгера для трассировки компонента (например, 'QualityAgent', 'Orchestrator').
-        log_dir (str): Директория для сохранения файлов журнала (по умолчанию 'logs').
-
-    Возвращает:
-        logging.Logger: Сконфигурированный экземпляр стандартного логгера Python.
+    Создает и настраивает логгер в соответствии с требованиями INT-03:
+    1. File handler (JSON) -> logs/{datetime.now():%Y-%m-%d_%H-%M-%S}.json
+    2. File handler (текстовый) -> logs/system.log
+    3. Console handler -> stdout с форматированием '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
     """
-    # Гарантируем существование директории для логов
     Path(log_dir).mkdir(parents=True, exist_ok=True)
-    
+
     logger = logging.getLogger(name)
     logger.setLevel(logging.INFO)
 
-    # Предотвращаем дублирование обработчиков при повторных вызовах функции
-    if not logger.handlers:
-        # 1. Потоковый обработчик (вывод в консоль/терминал)
-        console_handler = logging.StreamHandler(sys.stdout)
-        log_format = logging.Formatter(
+    existing_files = [
+        str(Path(getattr(h, 'baseFilename', '')).resolve())
+        for h in logger.handlers
+        if isinstance(h, logging.FileHandler)
+    ]
+
+    # 1. File handler (JSON) по спецификации INT-03
+    json_path = Path(log_dir) / f"{datetime.now():%Y-%m-%d_%H-%M-%S}.json"
+    if str(json_path.resolve()) not in existing_files:
+        fh = logging.FileHandler(json_path, encoding="utf-8")
+        fh.setFormatter(logging.Formatter("%(message)s"))
+        logger.addHandler(fh)
+        existing_files.append(str(json_path.resolve()))
+
+    # 2. File handler (system.log) для постоянного аудита и совместимости с тестами
+    sys_log = Path(log_dir) / "system.log"
+    if str(sys_log.resolve()) not in existing_files:
+        fh_sys = logging.FileHandler(sys_log, encoding="utf-8")
+        fh_sys.setFormatter(logging.Formatter(
             '[%(asctime)s] [%(levelname)s] [%(name)s]: %(message)s',
             datefmt='%Y-%m-%d %H:%M:%S'
-        )
-        console_handler.setFormatter(log_format)
-        logger.addHandler(console_handler)
+        ))
+        logger.addHandler(fh_sys)
+        existing_files.append(str(sys_log.resolve()))
 
-        # 2. Файловый обработчик (персистентный журнал для аудита и воспроизводимости)
-        file_handler = logging.FileHandler(f"{log_dir}/system.log", encoding="utf-8")
-        file_handler.setFormatter(log_format)
-        logger.addHandler(file_handler)
+    # 3. Console handler
+    if not any(isinstance(h, logging.StreamHandler) and not isinstance(h, logging.FileHandler) for h in logger.handlers):
+        ch = logging.StreamHandler(sys.stdout)
+        ch.setFormatter(logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s"))
+        logger.addHandler(ch)
 
     return logger
