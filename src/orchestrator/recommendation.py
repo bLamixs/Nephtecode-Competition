@@ -56,9 +56,19 @@ class ActionList(list):
                 else:
                     result[tag] = {
                         'from': getattr(item, 'from_value', 0.0),
-                        'to': getattr(item, 'to_value', 0.0)
+                        'to': getattr(item, 'to_value', 0.0),
+                        'unit': getattr(item, 'unit', '')
                     }
         return result
+
+    def items(self):
+        return self.to_dict().items()
+
+    def keys(self):
+        return self.to_dict().keys()
+
+    def values(self):
+        return self.to_dict().values()
 
 
 # ============================================================================
@@ -157,6 +167,7 @@ class ExpectedEffect:
             'CFPP_60min': self.cfpp_60min,
             'throughput': self.throughput,
             'throughput_delta': self.throughput_delta,
+            'throughput_change': self.throughput_delta,
             'energy_proxy': self.energy_proxy,
             'energy_delta': self.energy_delta,
             'risk_index': self.risk_index,
@@ -305,6 +316,13 @@ class Alternative:
             return self[key]
         except KeyError:
             return default
+
+    def __str__(self) -> str:
+        if isinstance(self.action, dict):
+            act_str = ", ".join(f"{k}: {v}" for k, v in self.action.items())
+        else:
+            act_str = str(self.action)
+        return f"{act_str} (Score: {self.score:.4f}, Выпуск: {self.throughput:.1f} м³/ч, Риск: {self.risk_index:.2f})"
 
 
 @dataclass

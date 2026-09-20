@@ -288,71 +288,110 @@ tab_rec, tab_telemetry, tab_agents, tab_logs = st.tabs([
 # ВКЛАДКА 1: РЕКОМЕНДАЦИЯ ОПЕРАТОРУ (INT-02)
 # ----------------------------------------------------------------------------
 with tab_rec:
-    if rec.status == "RECOMMENDED":
-        st.success(f"**Обоснование решения**: {rec.explanation}")
+    recommendation = rec
+
+    if recommendation.status == "RECOMMENDED":
+        st.subheader("✅ Рекомендация")
+
+        # Объяснение
+        st.info(recommendation.explanation)
 
         col_act, col_eff = st.columns([3, 2])
 
         with col_act:
-            st.markdown("#### 🛠️ Рекомендуемые управляющие воздействия")
-            if rec.action:
+            # Действие
+            st.write("**Действие:**")
+            action_items = list(recommendation.action.items()) if hasattr(recommendation.action, 'items') else []
+            for tag, change in action_items:
+                ch_from = change.get('from', getattr(change, 'from_value', 0.0)) if hasattr(change, 'get') else getattr(change, 'from_value', 0.0)
+                ch_to = change.get('to', getattr(change, 'to_value', 0.0)) if hasattr(change, 'get') else getattr(change, 'to_value', 0.0)
+                ch_unit = change.get('unit', getattr(change, 'unit', '')) if hasattr(change, 'get') else getattr(change, 'unit', '')
+                st.write(f"- {tag}: {ch_from} → {ch_to} {ch_unit}".strip())
+
+            # Таблица действий с дельтами
+            if recommendation.action:
                 actions_data = []
-                for a in rec.action:
+                for a in recommendation.action:
+                    tag = getattr(a, 'tag', a.get('tag', '')) if hasattr(a, 'get') else getattr(a, 'tag', '')
+                    name = getattr(a, 'name', a.get('name', tag)) if hasattr(a, 'get') else getattr(a, 'name', tag)
+                    from_v = getattr(a, 'from_value', a.get('from', 0.0)) if hasattr(a, 'get') else getattr(a, 'from_value', 0.0)
+                    to_v = getattr(a, 'to_value', a.get('to', 0.0)) if hasattr(a, 'get') else getattr(a, 'to_value', 0.0)
+                    unit = getattr(a, 'unit', a.get('unit', '')) if hasattr(a, 'get') else getattr(a, 'unit', '')
+                    delta = getattr(a, 'delta', a.get('delta', to_v - from_v)) if hasattr(a, 'get') else (to_v - from_v)
+                    pct = getattr(a, 'delta_percent', a.get('delta_percent', 0.0)) if hasattr(a, 'get') else 0.0
                     actions_data.append({
-                        "Тег": a.tag,
-                        "Параметр": a.name,
-                        "Текущее": f"{a.from_value:.1f} {a.unit}",
-                        "Рекомендуемое": f"{a.to_value:.1f} {a.unit}",
-                        "Изменение (Δ)": f"{a.delta:+.1f} ({a.delta_percent:+.1f}%)"
+                        "Тег": tag,
+                        "Параметр": name,
+                        "Текущее": f"{from_v:.1f} {unit}",
+                        "Рекомендуемое": f"{to_v:.1f} {unit}",
+                        "Изменение (Δ)": f"{delta:+.1f} ({pct:+.1f}%)"
                     })
                 st.dataframe(pd.DataFrame(actions_data), use_container_width=True, hide_index=True)
-            else:
-                st.info("Режим стабилен: изменение уставок не требуется (удержание оптимума).")
 
-            st.markdown("#### 🔒 Проверенные технологические ограничения")
-            if rec.constraints_checked:
+            # Проверенные ограничения
+            st.write("**Проверенные ограничения:**")
+            for c in recommendation.constraints_checked:
+                c_name = c.get('constraint', getattr(c, 'constraint', '')) if hasattr(c, 'get') else getattr(c, 'constraint', '')
+                c_status = c.get('status', getattr(c, 'status', '')) if hasattr(c, 'get') else getattr(c, 'status', '')
+                st.write(f"- {c_name}: {c_status}")
+
+            if recommendation.constraints_checked:
                 cons_data = []
-                for c in rec.constraints_checked:
+                for c in recommendation.constraints_checked:
+                    c_name = c.get('constraint', getattr(c, 'constraint', '')) if hasattr(c, 'get') else getattr(c, 'constraint', '')
+                    c_val = c.get('predicted_value', getattr(c, 'predicted_value', 0.0)) if hasattr(c, 'get') else getattr(c, 'predicted_value', 0.0)
+                    c_thresh = c.get('threshold', getattr(c, 'threshold', 0.0)) if hasattr(c, 'get') else getattr(c, 'threshold', 0.0)
+                    c_margin = c.get('margin', getattr(c, 'margin', 0.0)) if hasattr(c, 'get') else getattr(c, 'margin', 0.0)
+                    c_st = c.get('status', getattr(c, 'status', '')) if hasattr(c, 'get') else getattr(c, 'status', '')
                     cons_data.append({
-                        "Ограничение": c.constraint,
-                        "Значение": f"{c.predicted_value:.3f}",
-                        "Порог": f"{c.threshold:.3f}",
-                        "Запас (margin)": f"{c.margin:.3f}",
-                        "Статус": "✅ PASS" if c.status == "PASS" else "❌ FAIL"
+                        "Ограничение": c_name,
+                        "Значение": f"{c_val:.3f}",
+                        "Порог": f"{c_thresh:.3f}",
+                        "Запас (margin)": f"{c_margin:.3f}",
+                        "Статус": "✅ PASS" if c_st == "PASS" else "❌ FAIL"
                     })
                 st.dataframe(pd.DataFrame(cons_data), use_container_width=True, hide_index=True)
 
         with col_eff:
-            st.markdown("#### 📊 Ожидаемый эффект (горизонт 60 мин)")
-            ee = rec.expected_effect
+            # Ожидаемый эффект
+            st.write("**Ожидаемый эффект:**")
+            ee = recommendation.expected_effect
+            ee_s = ee['Sulfur_60min'] if hasattr(ee, '__getitem__') else getattr(ee, 'sulfur_60min', None)
+            ee_tp = ee['throughput_change'] if hasattr(ee, '__getitem__') else getattr(ee, 'throughput_delta', None)
+            st.write(f"- Сера (60 мин): {ee_s} мг/кг")
+            st.write(f"- Выпуск: {ee_tp} т/ч")
+
+            # Метрики
             eff_col1, eff_col2 = st.columns(2)
             with eff_col1:
-                st.metric("Сера через 60 мин", f"{ee.sulfur_60min:.2f} мг/кг", f"{ee.sulfur_delta:+.2f} мг/кг", delta_color="inverse")
-                st.metric("Плотность D15", f"{ee.d15_60min:.1f} кг/м³" if ee.d15_60min else "835.0")
+                try:
+                    s_float = float(ee_s) if ee_s is not None else None
+                    st.metric("Сера через 60 мин", f"{s_float:.2f} мг/кг" if s_float is not None else "—", delta_color="inverse")
+                except (ValueError, TypeError):
+                    st.metric("Сера через 60 мин", f"{ee_s} мг/кг", delta_color="inverse")
+                d15_val = ee.get('D15_60min', getattr(ee, 'd15_60min', 835.0)) if hasattr(ee, 'get') else getattr(ee, 'd15_60min', 835.0)
+                st.metric("Плотность D15", f"{float(d15_val):.1f} кг/м³" if d15_val is not None else "835.0 кг/м³")
             with eff_col2:
-                st.metric("Расход сырья", f"{ee.throughput:.1f} м³/ч", f"{ee.throughput_delta:+.1f} м³/ч")
-                st.metric("Энергетический индекс", f"{ee.energy_proxy:.4f}" if ee.energy_proxy else "0.24")
+                tp_val = ee.get('throughput', getattr(ee, 'throughput', 215.0)) if hasattr(ee, 'get') else getattr(ee, 'throughput', 215.0)
+                try:
+                    tp_f = float(tp_val)
+                    delta_f = float(ee_tp) if ee_tp is not None else None
+                    st.metric("Расход сырья", f"{tp_f:.1f} м³/ч", f"{delta_f:+.1f} т/ч" if delta_f is not None else None)
+                except (ValueError, TypeError):
+                    st.metric("Расход сырья", f"{tp_val} м³/ч")
+                en_val = ee.get('energy_proxy', getattr(ee, 'energy_proxy', 0.24)) if hasattr(ee, 'get') else getattr(ee, 'energy_proxy', 0.24)
+                st.metric("Энергетический индекс", f"{float(en_val):.4f}" if en_val is not None else "0.2400")
 
-            # Альтернативные варианты (Pareto)
-            st.markdown("#### 🔀 Альтернативные варианты (Парето-фронт)")
-            if rec.alternatives:
-                alts_data = []
-                for alt in rec.alternatives:
-                    alts_data.append({
-                        "Вариант": f"#{alt.id}",
-                        "Score": f"{alt.score:.4f}",
-                        "F9 (м³/ч)": f"{alt.throughput:.1f}",
-                        "Δ Score": f"{alt.delta_score:+.4f}",
-                        "Риск": f"{alt.risk_index:.2f}"
-                    })
-                st.dataframe(pd.DataFrame(alts_data), use_container_width=True, hide_index=True)
+            # Альтернативы
+            st.write("**Альтернативы:**")
+            if recommendation.alternatives:
+                for i, alt in enumerate(recommendation.alternatives, 1):
+                    st.write(f"{i}. {alt}")
             else:
                 st.caption("Дополнительные альтернативы не сформированы.")
 
-    else:
-        # ОТКАЗ ОТ РЕКОМЕНДАЦИИ (ORCH-05 / INT-02)
-        st.error(f"### ⛔ Отказ от автоматической рекомендации")
-        st.markdown(f"**Причина отказа**: {rec.explanation}")
+    elif recommendation.status == "NO_RECOMMENDATION":
+        st.error(f"❌ {recommendation.explanation}")
         
         st.warning("""
         **Действия оператора при отказе:**
@@ -360,6 +399,8 @@ with tab_rec:
         2. При переходе в ручной режим управления руководствуйтесь технологическим регламентом установки 24-2000.
         3. Не превышайте максимальные технологические границы безопасности оборудования.
         """)
+    else:
+        st.error(f"❌ {recommendation.explanation}")
 
 
 # ----------------------------------------------------------------------------
