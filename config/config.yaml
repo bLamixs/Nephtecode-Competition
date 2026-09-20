@@ -4,9 +4,9 @@ optimizer:
   # Управляемые параметры
   controlled_params:
     T6:
-      current: 295.0
-      min: 290.0
-      max: 305.0
+      current: 360.0
+      min: 345.0
+      max: 375.0
       unit: "°C"
       description: "Температура реактора гидроочистки (Р-201)"
 
@@ -18,62 +18,62 @@ optimizer:
       description: "Соотношение ВСГ/сырьё"
 
     T55:
-      current: 320.0
-      min: 315.0
-      max: 330.0
+      current: 380.0
+      min: 375.0
+      max: 386.0
       unit: "°C"
       description: "Температура печи П-1/1"
 
     F9:
-      current: 250.0
-      min: 225.0
-      max: 275.0
+      current: 215.0
+      min: 160.0
+      max: 280.0
       unit: "т/ч"
       description: "Расход обессоленной нефти на гидроочистку"
 
   # Доли блендинга
   blending_fractions:
     F30:
-      current: 0.30
-      min: 0.25
-      max: 0.35
-      unit: "доля"
-      description: "Доля фракции 240-290°C"
-
-    F32:
-      current: 0.25
-      min: 0.20
-      max: 0.30
+      current: 0.23
+      min: 0.18
+      max: 0.28
       unit: "доля"
       description: "Доля фракции 290-350°C"
 
-    F34:
-      current: 0.20
-      min: 0.15
-      max: 0.25
+    F32:
+      current: 0.14
+      min: 0.10
+      max: 0.20
       unit: "доля"
-      description: "Доля фракции 350-500°C"
+      description: "Доля фракции 240-290°C"
+
+    F34:
+      current: 0.15
+      min: 0.10
+      max: 0.20
+      unit: "доля"
+      description: "Доля фракции 150-250°C"
 
     F56:
-      current: 0.10
-      min: 0.05
-      max: 0.15
+      current: 0.05
+      min: 0.02
+      max: 0.09
       unit: "доля"
       description: "Доля лёгкого компонента"
 
     F57:
-      current: 0.10
-      min: 0.05
-      max: 0.15
+      current: 0.06
+      min: 0.03
+      max: 0.10
       unit: "доля"
       description: "Доля тяжёлого компонента"
 
     F59:
-      current: 0.05
-      min: 0.02
-      max: 0.08
+      current: 0.36
+      min: 0.30
+      max: 0.42
       unit: "доля"
-      description: "Доля присадки"
+      description: "Доля фракции 420-500°C"
 
   # Веса целевой функции
   weights:

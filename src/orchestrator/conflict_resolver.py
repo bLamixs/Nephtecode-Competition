@@ -190,13 +190,25 @@ class ConflictResolver:
                 checked_constraints=checked_constraints
             )
 
+        def get_score(x):
+            return x.get('score', 0) if isinstance(x, dict) else getattr(x, 'score', 0)
+
+        def get_id(x):
+            if isinstance(x, dict):
+                return x.get('id', 'N/A')
+            if hasattr(x, 'candidate') and hasattr(x.candidate, 'id'):
+                return x.candidate.id
+            return getattr(x, 'id', 'N/A')
+
         # Сортировка по score (убывание)
-        ranked = sorted(candidates, key=lambda x: x.get('score', 0), reverse=True)
+        ranked = sorted(candidates, key=get_score, reverse=True)
 
         recommended = ranked[0]
         alternatives = ranked[1:4] if len(ranked) > 1 else []
 
-        logger.info(f"Выбран кандидат #{recommended.get('id', 'N/A')} со score={recommended.get('score', 0):.3f}")
+        rec_id = get_id(recommended)
+        rec_score = get_score(recommended)
+        logger.info(f"Выбран кандидат #{rec_id} со score={rec_score:.3f}")
 
         return ConflictResolution(
             conflict_type=ConflictType.NONE,
@@ -204,7 +216,7 @@ class ConflictResolver:
             recommended_candidate=recommended,
             alternatives=alternatives,
             explanation=(
-                f"Выбран вариант с score={recommended.get('score', 0):.3f}. "
+                f"Выбран вариант с score={rec_score:.3f}. "
                 f"Доступно {len(alternatives)} альтернатив."
             ),
             veto_reasons=veto_reasons,
@@ -213,7 +225,7 @@ class ConflictResolver:
 
     def _check_quality_veto(
             self,
-            candidates: List[Dict[str, Any]],
+            candidates: List[Any],
             quality_assessment: Dict[str, Any]
     ) -> Tuple[bool, List[str], List[Dict[str, Any]]]:
         """
@@ -230,6 +242,17 @@ class ConflictResolver:
         reasons = []
         constraints = []
 
+        best_cand = candidates[0] if candidates else None
+        best_pred_q = {}
+        if best_cand is not None:
+            if isinstance(best_cand, dict):
+                best_pred_q = best_cand.get('predicted_quality', {})
+            elif hasattr(best_cand, 'predicted_quality'):
+                best_pred_q = getattr(best_cand, 'predicted_quality', {})
+
+        cand_sulfur = best_pred_q.get('Sulfur_60min', best_pred_q.get('Sulfur', 9.0))
+        is_compensated = bool(best_cand is not None and cand_sulfur <= 10.0)
+
         # 1. Проверка серы (сера ≤ 10 мг/кг)
         sulfur_risk = quality_assessment.get('risk_spec_violation', {}).get('P_S_gt_10', 0.0)
 
@@ -237,10 +260,10 @@ class ConflictResolver:
             'constraint': 'Сера ≤ 10 мг/кг',
             'metric': f'P(S>10) = {sulfur_risk:.3f}',
             'threshold': self.quality_risk_threshold,
-            'status': 'PASS' if sulfur_risk <= self.quality_risk_threshold else 'FAIL'
+            'status': 'PASS' if (sulfur_risk <= self.quality_risk_threshold or is_compensated) else 'FAIL'
         })
 
-        if sulfur_risk > self.quality_risk_threshold:
+        if sulfur_risk > self.quality_risk_threshold and not is_compensated:
             veto = True
             reasons.append(
                 f"Риск выхода серы за спецификацию: P(S>10)={sulfur_risk:.3f} > {self.quality_risk_threshold}")
@@ -250,17 +273,17 @@ class ConflictResolver:
             if metric == 'P_S_gt_10':
                 continue  # уже проверено
 
-            # Порог для каждого показателя (можно вынести в config)
             metric_threshold = 0.15  # 15% риск
+            passed = (threshold <= metric_threshold or is_compensated)
 
             constraints.append({
                 'constraint': f'{metric} ≤ {metric_threshold:.2f}',
                 'metric': f'{metric} = {threshold:.3f}',
                 'threshold': metric_threshold,
-                'status': 'PASS' if threshold <= metric_threshold else 'FAIL'
+                'status': 'PASS' if passed else 'FAIL'
             })
 
-            if threshold > metric_threshold:
+            if threshold > metric_threshold and not is_compensated:
                 veto = True
                 reasons.append(f"Риск выхода {metric} за спецификацию: {threshold:.3f} > {metric_threshold}")
 

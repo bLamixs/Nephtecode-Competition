@@ -11,8 +11,9 @@ import logging
 import json
 import os
 from datetime import datetime
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, Tuple, List
 import asyncio
+import numpy as np
 import pandas as pd
 from pathlib import Path
 
@@ -119,23 +120,156 @@ class Orchestrator:
         ch.setFormatter(formatter)
         logger.addHandler(ch)
 
+    def _load_scenario_data(self, scenario: str = 'normal') -> Tuple[pd.DataFrame, pd.DataFrame]:
+        """
+        Загрузка данных по имени сценария.
+        Поддерживает: 'normal', 'risk', 'missing', 'no_solution'.
+        """
+        scenario_key = str(scenario).lower().strip()
+        scenario_file = None
+        for cand in [f"{scenario_key}.json", f"{scenario_key}_operation.json", f"{scenario_key}_sulfur_growth.json"]:
+            path = Path('scenarios') / cand
+            if path.exists():
+                scenario_file = path
+                break
+
+        mock_state = {}
+        if scenario_file and scenario_file.exists():
+            try:
+                with open(scenario_file, 'r', encoding='utf-8') as f:
+                    sc_data = json.load(f)
+                    mock_state = sc_data.get('mock_state', {})
+            except Exception as e:
+                logger.warning(f"Не удалось прочитать {scenario_file}: {e}")
+
+        n_rows = 100
+        dates = pd.date_range(end=datetime.now(), periods=n_rows, freq='1min')
+
+        if 'missing' in scenario_key:
+            telemetry = pd.DataFrame({
+                'date': dates,
+                'T6': [np.nan] * n_rows,
+                'F9': [np.nan] * n_rows,
+                'F2_F26_ratio': [0.85] * n_rows,
+                'T55': [320.0] * n_rows,
+            })
+            quality_data = pd.DataFrame([
+                {
+                    'tag': 'Sulfur',
+                    'value': 8.0,
+                    'source': 'LIMS',
+                    'age_min': float(mock_state.get('lims_age_hours', 52.0)) * 60.0,
+                    'timestamp': dates[-1]
+                },
+                {
+                    'tag': 'D15',
+                    'value': 835.0,
+                    'source': 'PAK',
+                    'age_min': float(mock_state.get('pak_age_minutes', 250.0)),
+                    'timestamp': dates[-1]
+                }
+            ])
+        elif 'no_solution' in scenario_key:
+            telemetry = pd.DataFrame({
+                'date': dates,
+                'T6': np.random.normal(380.0, 0.2, n_rows),
+                'F9': np.random.normal(80.0, 1.0, n_rows),
+                'F2_F26_ratio': np.random.normal(0.85, 0.01, n_rows),
+                'T55': np.random.normal(370.0, 1.0, n_rows),
+            })
+            quality_data = pd.DataFrame([
+                {
+                    'tag': 'Sulfur',
+                    'value': float(mock_state.get('pak_sulfur', 11.5)),
+                    'source': 'PAK',
+                    'age_min': float(mock_state.get('pak_age_minutes', 8.0)),
+                    'timestamp': dates[-1]
+                },
+                {
+                    'tag': 'D15',
+                    'value': 838.0,
+                    'source': 'LIMS',
+                    'age_min': 45.0,
+                    'timestamp': dates[-1]
+                }
+            ])
+        elif 'risk' in scenario_key:
+            telemetry = pd.DataFrame({
+                'date': dates,
+                'T6': [360.0] * n_rows,
+                'T11_hydro': [365.0] * n_rows,
+                'F9': [215.0] * n_rows,
+                'F2_F26_ratio': [0.85] * n_rows,
+                'T55': [380.0] * n_rows,
+            })
+            quality_data = pd.DataFrame([
+                {
+                    'tag': 'Sulfur',
+                    'value': float(mock_state.get('pak_sulfur', 9.8)),
+                    'source': 'PAK',
+                    'age_min': float(mock_state.get('pak_age_minutes', 5.0)),
+                    'timestamp': dates[-1]
+                },
+                {
+                    'tag': 'D15',
+                    'value': 835.0,
+                    'source': 'LIMS',
+                    'age_min': 40.0,
+                    'timestamp': dates[-1]
+                }
+            ])
+        else:
+            telemetry = pd.DataFrame({
+                'date': dates,
+                'T6': [360.0] * n_rows,
+                'T11_hydro': [365.0] * n_rows,
+                'F9': [215.0] * n_rows,
+                'F2_F26_ratio': [0.85] * n_rows,
+                'T55': [380.0] * n_rows,
+            })
+            quality_data = pd.DataFrame([
+                {
+                    'tag': 'Sulfur',
+                    'value': float(mock_state.get('pak_sulfur', 6.8)),
+                    'source': 'PAK',
+                    'age_min': float(mock_state.get('pak_age_minutes', 10.0)),
+                    'timestamp': dates[-1]
+                },
+                {
+                    'tag': 'D15',
+                    'value': 832.0,
+                    'source': 'LIMS',
+                    'age_min': 45.0,
+                    'timestamp': dates[-1]
+                }
+            ])
+
+        return telemetry, quality_data
+
     async def run_cycle(
         self,
-        telemetry: pd.DataFrame,
-        quality_data: pd.DataFrame,
+        telemetry: Optional[pd.DataFrame] = None,
+        quality_data: Optional[pd.DataFrame] = None,
         scenario: str = 'normal'
     ) -> Recommendation:
         """
         Один цикл принятия решения.
 
         Args:
-            telemetry: телеметрия
-            quality_data: данные о качестве
-            scenario: сценарий
+            telemetry: телеметрия (если None, загружается по сценарию)
+            quality_data: данные о качестве (если None, загружается по сценарию)
+            scenario: сценарий ('normal', 'risk', 'missing', 'no_solution')
 
         Returns:
             Recommendation
         """
+        if telemetry is None or quality_data is None:
+            sc_telemetry, sc_quality = self._load_scenario_data(scenario)
+            if telemetry is None:
+                telemetry = sc_telemetry
+            if quality_data is None:
+                quality_data = sc_quality
+
         cycle_id = f"cycle_{datetime.now():%Y%m%d_%H%M%S}"
 
         logger.info("="*80)
@@ -323,9 +457,168 @@ class Orchestrator:
         cycle_id: str
     ) -> Recommendation:
         """Формирование рекомендации (ORCH-04)."""
-        # ... (код из предыдущей реализации)
-        # Добавляем cycle_id в metadata
-        pass
+        cand = conflict_resolution.recommended_candidate
+        if cand is None and optimization_result is not None:
+            cand = getattr(optimization_result, 'recommended', None)
+
+        if cand is None:
+            return self._no_recommendation("Нет допустимых вариантов управления", cycle_id=cycle_id)
+
+        t6_curr = float(telemetry['T6'].dropna().iloc[-1]) if 'T6' in telemetry and not telemetry['T6'].dropna().empty else 360.0
+        f2_ratio_curr = float(telemetry['F2_F26_ratio'].dropna().iloc[-1]) if 'F2_F26_ratio' in telemetry and not telemetry['F2_F26_ratio'].dropna().empty else 0.85
+        t55_curr = float(telemetry['T55'].dropna().iloc[-1]) if 'T55' in telemetry and not telemetry['T55'].dropna().empty else 380.0
+        f9_curr = float(telemetry['F9'].dropna().iloc[-1]) if 'F9' in telemetry and not telemetry['F9'].dropna().empty else 215.0
+
+        sulfur_row = quality_data[quality_data['tag'] == 'Sulfur'] if 'tag' in quality_data.columns else pd.DataFrame()
+        sulfur_curr = float(sulfur_row['value'].iloc[-1]) if not sulfur_row.empty else 9.2
+        sulfur_age = float(sulfur_row['age_min'].iloc[-1]) if not sulfur_row.empty and 'age_min' in sulfur_row.columns else 45.0
+
+        state = {
+            'T6': round(t6_curr, 2),
+            'F2_F26_ratio': round(f2_ratio_curr, 4),
+            'T55': round(t55_curr, 2),
+            'F9': round(f9_curr, 2),
+            'Sulfur_current': round(sulfur_curr, 2),
+            'Sulfur_age_min': round(sulfur_age, 1)
+        }
+
+        # Кандидат
+        cand_dict = cand if isinstance(cand, dict) else (cand.__dict__ if hasattr(cand, '__dict__') else {})
+        cand_action = cand_dict.get('action', {})
+        if hasattr(cand, 'candidate') and hasattr(cand.candidate, 'params'):
+            cand_action = cand.candidate.params
+        elif hasattr(cand, 'action') and isinstance(cand.action, dict):
+            cand_action = cand.action
+        elif 'params' in cand_dict:
+            cand_action = cand_dict['params']
+
+        actions = []
+        if 'T6' in cand_action:
+            to_t6 = float(cand_action['T6'])
+            actions.append(create_action_item('T6', 'Температура реактора', t6_curr, to_t6, '°C'))
+        if 'F2_F26_ratio' in cand_action:
+            to_ratio = float(cand_action['F2_F26_ratio'])
+            actions.append(create_action_item('F2_F26_ratio', 'Соотношение ВСГ / сырье', f2_ratio_curr, to_ratio, '-'))
+        if 'T55' in cand_action:
+            to_t55 = float(cand_action['T55'])
+            actions.append(create_action_item('T55', 'Температура низа колонны', t55_curr, to_t55, '°C'))
+        if 'F9' in cand_action:
+            to_f9 = float(cand_action['F9'])
+            actions.append(create_action_item('F9', 'Расход сырья', f9_curr, to_f9, 'м³/ч'))
+
+        # Эффект
+        pred_q = cand_dict.get('predicted_quality', {})
+        s_60 = pred_q.get('Sulfur_60min', pred_q.get('Sulfur', 7.5))
+        d15_60 = pred_q.get('D15_60min', pred_q.get('D15', 835.0))
+        t_60 = pred_q.get('T95_60min', pred_q.get('T95', 355.0))
+        cfpp_60 = pred_q.get('CFPP_60min', pred_q.get('CFPP', -20.0))
+
+        throughput = float(cand_dict.get('throughput', f9_curr))
+        throughput_delta = throughput - f9_curr
+        energy_proxy = float(cand_dict.get('energy_proxy', 0.45))
+        rel_risk = getattr(reliability_assessment, 'risk_index', 0.15)
+        risk_idx = float(cand_dict.get('risk_index', rel_risk))
+
+        expected_effect = ExpectedEffect(
+            sulfur_60min=round(s_60, 2),
+            sulfur_delta=round(s_60 - sulfur_curr, 2),
+            d15_60min=round(d15_60, 1),
+            t95_60min=round(t_60, 1),
+            cfpp_60min=round(cfpp_60, 1),
+            throughput=round(throughput, 2),
+            throughput_delta=round(throughput_delta, 2),
+            energy_proxy=round(energy_proxy, 4),
+            risk_index=round(risk_idx, 3),
+            risk_delta=round(risk_idx - rel_risk, 3)
+        )
+
+        # Ограничения
+        constraints_checked = []
+        for c in conflict_resolution.checked_constraints:
+            try:
+                thresh_float = float(c.get('threshold', 0.0))
+            except (ValueError, TypeError):
+                thresh_float = 0.0
+
+            try:
+                pred_float = float(c.get('predicted_value', c.get('value', 0.0)))
+            except (ValueError, TypeError):
+                pred_float = 0.0
+
+            constraints_checked.append(
+                create_constraint_check(
+                    constraint_id=c.get('constraint_id', f"C_{len(constraints_checked)+1:03d}"),
+                    constraint=c.get('constraint', c.get('name', 'Ограничение')),
+                    predicted_value=pred_float,
+                    threshold=thresh_float
+                )
+            )
+        if not constraints_checked:
+            constraints_checked.append(create_constraint_check('C001', 'Сера ≤ 10 мг/кг', s_60, 10.0))
+            constraints_checked.append(create_constraint_check('C002', 'Риск оборудования < 0.70', risk_idx, 0.70))
+
+        # Альтернативы
+        alts = []
+        ref_score = float(getattr(cand, 'score', cand_dict.get('score', 0.5)))
+        for a in conflict_resolution.alternatives:
+            a_dict = a if isinstance(a, dict) else (a.__dict__ if hasattr(a, '__dict__') else {})
+            a_action = a_dict.get('action', {})
+            if hasattr(a, 'candidate') and hasattr(a.candidate, 'params'):
+                a_action = a.candidate.params
+            elif 'params' in a_dict:
+                a_action = a_dict['params']
+
+            a_id = getattr(getattr(a, 'candidate', None), 'id', a_dict.get('id', len(alts) + 2))
+            a_score = float(getattr(a, 'score', a_dict.get('score', 0.0)))
+            a_throughput = float(getattr(a, 'throughput', a_dict.get('throughput', throughput)))
+            a_energy = float(getattr(a, 'energy_proxy', a_dict.get('energy_proxy', energy_proxy)))
+            a_risk = float(getattr(a, 'risk_index', a_dict.get('risk_index', risk_idx)))
+
+            alts.append(
+                create_alternative(
+                    id=int(a_id) if isinstance(a_id, (int, float, str)) and str(a_id).isdigit() else len(alts) + 2,
+                    action=a_action,
+                    score=a_score,
+                    throughput=a_throughput,
+                    energy_proxy=a_energy,
+                    risk_index=a_risk,
+                    reference_score=ref_score,
+                    reference_throughput=throughput
+                )
+            )
+
+        # Объяснение
+        action_parts = [f"{a.name}: {a.from_value:.1f} → {a.to_value:.1f} {a.unit}" for a in actions]
+        action_str = "; ".join(action_parts) if action_parts else "сохранение текущего режима"
+        rel_class = getattr(reliability_assessment, 'risk_class', 'LOW')
+        explanation = (
+            f"Рекомендовано: {action_str}. "
+            f"Ожидаемая сера через 60 мин: {s_60:.2f} мг/кг (Δ={s_60 - sulfur_curr:+.2f} мг/кг). "
+            f"Производительность: {throughput:.1f} м³/ч. "
+            f"Индекс риска оборудования: {risk_idx:.2f} ({rel_class}). "
+            f"Решение сбалансировано по качеству, производительности и ресурсу катализатора."
+        )
+
+        conf = getattr(quality_assessment, 'confidence', 0.85)
+
+        return Recommendation(
+            recommendation_id=f"rec_{datetime.now():%Y%m%d_%H%M%S}",
+            timestamp=datetime.now().isoformat(),
+            state=state,
+            problem_type="RISK_SPEC_VIOLATION" if s_60 > 9.0 else "SUBOPTIMAL",
+            action=actions,
+            expected_effect=expected_effect,
+            constraints_checked=constraints_checked,
+            confidence=round(conf, 2),
+            status="RECOMMENDED",
+            alternatives=alts,
+            explanation=explanation,
+            metadata={
+                'cycle_id': cycle_id,
+                'candidate_id': cand_dict.get('id', 1),
+                'score': cand_dict.get('score', 0.0)
+            }
+        )
 
     def _save_input_data(
         self,
@@ -413,10 +706,10 @@ class Orchestrator:
     ):
         """Вызов Optimization Agent."""
         current_state = {
-            'T6': float(telemetry['T6'].iloc[-1]) if 'T6' in telemetry else 295.0,
+            'T6': float(telemetry['T6'].iloc[-1]) if 'T6' in telemetry else 360.0,
             'F2_F26_ratio': float(telemetry['F2_F26_ratio'].iloc[-1]) if 'F2_F26_ratio' in telemetry else 0.85,
-            'T55': float(telemetry['T55'].iloc[-1]) if 'T55' in telemetry else 320.0,
-            'F9': float(telemetry['F9'].iloc[-1]) if 'F9' in telemetry else 250.0,
+            'T55': float(telemetry['T55'].iloc[-1]) if 'T55' in telemetry else 380.0,
+            'F9': float(telemetry['F9'].iloc[-1]) if 'F9' in telemetry else 215.0,
         }
 
         return self.optimization_agent.optimize(
@@ -446,8 +739,8 @@ if __name__ == '__main__':
     print("="*80)
 
     telemetry = pd.DataFrame({
-        'T6': np.random.normal(295, 2, 100),
-        'F9': np.random.normal(250, 10, 100),
+        'T6': np.random.normal(360, 2, 100),
+        'F9': np.random.normal(215, 10, 100),
         'F2_F26_ratio': np.random.normal(0.85, 0.02, 100),
     })
 

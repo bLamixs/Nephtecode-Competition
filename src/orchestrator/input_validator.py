@@ -430,8 +430,8 @@ if __name__ == '__main__':
     print("=" * 80)
 
     telemetry_ok = pd.DataFrame({
-        'T6': np.random.normal(295, 2, 100),
-        'F9': np.random.normal(250, 10, 100),
+        'T6': np.random.normal(360, 2, 100),
+        'F9': np.random.normal(215, 10, 100),
         'F2_F26_ratio': np.random.normal(0.85, 0.02, 100),
     })
 

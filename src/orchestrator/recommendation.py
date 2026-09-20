@@ -35,11 +35,11 @@ class ActionItem:
     {
         "tag": "T6",
         "name": "Температура реактора",
-        "from": 295.0,
-        "to": 298.0,
+        "from": 360.0,
+        "to": 363.0,
         "unit": "°C",
         "delta": 3.0,
-        "delta_percent": 1.02
+        "delta_percent": 0.83
     }
     """
     tag: str
@@ -144,15 +144,15 @@ class Recommendation:
         "recommendation_id": "rec_20260917_134500",
         "timestamp": "2026-09-17T13:45:00",
         "state": {
-            "T6": 295.0,
+            "T6": 360.0,
             "F2_F26_ratio": 0.85,
-            "F9": 250.0,
+            "F9": 215.0,
             "Sulfur_current": 9.2,
             "Sulfur_age_min": 45
         },
         "problem_type": "RISK_SPEC_VIOLATION",
         "action": [
-            {"tag": "T6", "name": "Температура реактора", "from": 295.0, "to": 298.0, "unit": "°C", "delta": 3.0, "delta_percent": 1.02}
+            {"tag": "T6", "name": "Температура реактора", "from": 360.0, "to": 363.0, "unit": "°C", "delta": 3.0, "delta_percent": 0.83}
         ],
         "expected_effect": {
             "Sulfur_60min": 7.5,
@@ -415,35 +415,35 @@ if __name__ == '__main__':
         recommendation_id=f"rec_{datetime.now():%Y%m%d_%H%M%S}",
         timestamp=datetime.now().isoformat(),
         state={
-            'T6': 295.0,
+            'T6': 360.0,
             'F2_F26_ratio': 0.85,
-            'F9': 250.0,
+            'F9': 215.0,
             'Sulfur_current': 9.2,
             'Sulfur_age_min': 45
         },
         problem_type="RISK_SPEC_VIOLATION",
         action=[
-            create_action_item('T6', 'Температура реактора', 295.0, 298.0, '°C'),
+            create_action_item('T6', 'Температура реактора', 360.0, 363.0, '°C'),
             create_action_item('F2_F26_ratio', 'ВСГ/сырьё', 0.85, 0.875, '-')
         ],
         expected_effect=ExpectedEffect(
             sulfur_60min=7.5,
             sulfur_delta=-1.7,
-            throughput=262.5,
-            throughput_delta=2.5,
+            throughput=220.0,
+            throughput_delta=5.0,
             energy_proxy=0.45,
             risk_index=0.20
         ),
         constraints_checked=[
             create_constraint_check('C001', 'Сера ≤ 10 мг/кг', 7.5, 10.0),
-            create_constraint_check('C002', 'T6 в диапазоне [290, 305]', 298.0, 305.0)
+            create_constraint_check('C002', 'T6 в диапазоне [345, 375]', 363.0, 375.0)
         ],
         confidence=0.78,
         status="RECOMMENDED",
         alternatives=[
             create_alternative(
                 id=312,
-                action={'T6': 297.0, 'F2_F26_ratio': 0.87},
+                action={'T6': 363.0, 'F2_F26_ratio': 0.87},
                 score=0.4412,
                 throughput=260.0,
                 energy_proxy=0.46,

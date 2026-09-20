@@ -99,19 +99,19 @@ class OptimizationResult:
 # ============================================================================
 
 CONTROLLED_PARAMS: Dict[str, ControlledParam] = {
-    'T6': ControlledParam(current=295.0, min=290.0, max=305.0, unit='°C', description='Температура реактора', step=1.0),
+    'T6': ControlledParam(current=360.0, min=345.0, max=375.0, unit='°C', description='Температура реактора', step=1.0),
     'F2_F26_ratio': ControlledParam(current=0.85, min=0.80, max=0.95, unit='-', description='ВСГ/сырьё', step=0.025),
-    'T55': ControlledParam(current=320.0, min=315.0, max=330.0, unit='°C', description='Температура печи', step=2.5),
-    'F9': ControlledParam(current=250.0, min=225.0, max=275.0, unit='т/ч', description='Расход на гидроочистку', step=5.0),
+    'T55': ControlledParam(current=380.0, min=375.0, max=386.0, unit='°C', description='Температура печи', step=1.0),
+    'F9': ControlledParam(current=215.0, min=160.0, max=280.0, unit='т/ч', description='Расход на гидроочистку', step=5.0),
 }
 
 BLENDING_FRACTIONS: Dict[str, ControlledParam] = {
-    'F30': ControlledParam(current=0.30, min=0.25, max=0.35, unit='доля', description='Фракция 240-290°C'),
-    'F32': ControlledParam(current=0.25, min=0.20, max=0.30, unit='доля', description='Фракция 290-350°C'),
-    'F34': ControlledParam(current=0.20, min=0.15, max=0.25, unit='доля', description='Фракция 350-500°C'),
-    'F56': ControlledParam(current=0.10, min=0.05, max=0.15, unit='доля', description='Лёгкий компонент'),
-    'F57': ControlledParam(current=0.10, min=0.05, max=0.15, unit='доля', description='Тяжёлый компонент'),
-    'F59': ControlledParam(current=0.05, min=0.02, max=0.08, unit='доля', description='Присадка'),
+    'F30': ControlledParam(current=0.23, min=0.18, max=0.28, unit='доля', description='Фракция 290-350°C'),
+    'F32': ControlledParam(current=0.14, min=0.10, max=0.20, unit='доля', description='Фракция 240-290°C'),
+    'F34': ControlledParam(current=0.15, min=0.10, max=0.20, unit='доля', description='Фракция 150-250°C'),
+    'F56': ControlledParam(current=0.05, min=0.02, max=0.09, unit='доля', description='Лёгкий компонент'),
+    'F57': ControlledParam(current=0.06, min=0.03, max=0.10, unit='доля', description='Тяжёлый компонент'),
+    'F59': ControlledParam(current=0.36, min=0.30, max=0.42, unit='доля', description='Фракция 420-500°C'),
 }
 
 
@@ -132,7 +132,7 @@ class OptimizationAgent:
         }
 
         self.baseline = {
-            'throughput': 250.0,
+            'throughput': 215.0,
             'energy': 1.0,
             'risk': 1.0
         }
@@ -339,9 +339,9 @@ class OptimizationAgent:
 
             return False, None
 
-        t6 = candidate.params.get('T6', 295.0)
-        # При T6=295 (норма): сера ~8.5 <= 10. При T6=290 (холодный реактор): сера ~11.5 > 10
-        sulfur_estimate = 8.5 - 0.6 * (t6 - 295.0)
+        t6 = candidate.params.get('T6', 360.0)
+        # При T6=360 (норма): сера ~8.5 <= 10. При T6=355 (холодный реактор): сера ~11.5 > 10
+        sulfur_estimate = 8.5 - 0.6 * (t6 - 360.0)
 
         if sulfur_estimate > 10.0:
             return True, f"Оценка серы={sulfur_estimate:.2f}"
@@ -477,12 +477,16 @@ class OptimizationAgent:
 
     def _estimate_energy_proxy(self, candidate: Candidate, current_state: Dict[str, float]) -> float:
         """Оценка энергозатрат (прокси, 0..1)."""
-        t6 = candidate.params.get('T6', current_state.get('T6', 295.0))
-        t6_normalized = (t6 - 290.0) / 15.0
+        t6 = candidate.params.get('T6', current_state.get('T6', 360.0))
+        t6_min = self.controlled_params['T6'].min
+        t6_range = self.controlled_params['T6'].max - t6_min
+        t6_normalized = (t6 - t6_min) / t6_range if t6_range > 0 else 0.5
         t6_normalized = min(1.0, max(0.0, t6_normalized))
 
-        t55 = candidate.params.get('T55', current_state.get('T55', 320.0))
-        t55_normalized = (t55 - 315.0) / 15.0
+        t55 = candidate.params.get('T55', current_state.get('T55', 380.0))
+        t55_min = self.controlled_params['T55'].min
+        t55_range = self.controlled_params['T55'].max - t55_min
+        t55_normalized = (t55 - t55_min) / t55_range if t55_range > 0 else 0.5
         t55_normalized = min(1.0, max(0.0, t55_normalized))
 
         f2_ratio = candidate.params.get('F2_F26_ratio', current_state.get('F2_F26_ratio', 0.85))
@@ -498,17 +502,17 @@ class OptimizationAgent:
         risks = []
 
         # T6: отклонение от нормы
-        t6 = candidate.params.get('T6', current_state.get('T6', 295.0))
+        t6 = candidate.params.get('T6', current_state.get('T6', 360.0))
         t6_norm = self.controlled_params['T6'].current
         t6_max = self.controlled_params['T6'].max
-        t6_deviation = abs(t6 - t6_norm) / (t6_max - t6_norm)
+        t6_deviation = abs(t6 - t6_norm) / (t6_max - t6_norm) if (t6_max - t6_norm) > 0 else 0.0
         risks.append(t6_deviation)
 
         # T55: отклонение от нормы
-        t55 = candidate.params.get('T55', current_state.get('T55', 320.0))
+        t55 = candidate.params.get('T55', current_state.get('T55', 380.0))
         t55_norm = self.controlled_params['T55'].current
         t55_max = self.controlled_params['T55'].max
-        t55_deviation = abs(t55 - t55_norm) / (t55_max - t55_norm)
+        t55_deviation = abs(t55 - t55_norm) / (t55_max - t55_norm) if (t55_max - t55_norm) > 0 else 0.0
         risks.append(t55_deviation)
 
         # F2_F26_ratio: отклонение от нормы
@@ -928,10 +932,10 @@ if __name__ == '__main__':
 
     # Текущее состояние (моки)
     current_state = {
-        'T6': 295.0,
+        'T6': 360.0,
         'F2_F26_ratio': 0.85,
-        'T55': 320.0,
-        'F9': 250.0
+        'T55': 380.0,
+        'F9': 215.0
     }
 
     # Полный цикл оптимизации
