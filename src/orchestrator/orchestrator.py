@@ -22,6 +22,8 @@ from src.agents.quality_agent import QualityAgent
 from src.agents.reliability_agent import ReliabilityAgent
 from src.agents.optimization_agent import OptimizationAgent, ScoredCandidate
 from src.orchestrator.conflict_resolver import ConflictResolver, ConflictResolution, ConflictType
+from dataclasses import asdict
+from src.utils.logging_config import setup_logger
 from src.orchestrator.input_validator import InputValidator, ValidationResult
 from src.orchestrator.recommendation import (
     Recommendation,
@@ -89,8 +91,8 @@ class Orchestrator:
 
     def _setup_logging(self):
         """Настройка логирования в файлы."""
-        # Лог оркестратора
-        orchestrator_log = self.log_dir / f"orchestrator_{datetime.now():%Y%m%d_%H%M%S}.log"
+        # Подключаем конфигурацию логирования INT-03 (JSON-файлы и консоль)
+        setup_logger(logger.name, log_dir=str(self.log_dir))
 
         # Форматтер
         formatter = logging.Formatter(
@@ -306,12 +308,27 @@ class Orchestrator:
 
         validation_result = self.input_validator.validate(telemetry, quality_data)
 
+        # INT-03: Логирование шага input_validation
+        logger.info(json.dumps({
+            "step": "input_validation",
+            "timestamp": datetime.now().isoformat(),
+            "data": {
+                "telemetry_rows": len(telemetry) if telemetry is not None else 0,
+                "quality_rows": len(quality_data) if quality_data is not None else 0
+            }
+        }, default=str, ensure_ascii=False))
+
         if not validation_result.is_valid:
             logger.error(f"Вход не валиден: {validation_result.reasons}")
             recommendation = self._no_recommendation(
                 f"Недостаточно данных: {'; '.join(validation_result.reasons)}",
                 cycle_id=cycle_id
             )
+            logger.info(json.dumps({
+                "step": "recommendation",
+                "timestamp": datetime.now().isoformat(),
+                "data": getattr(recommendation, 'dict', None) or (recommendation.to_dict() if hasattr(recommendation, 'to_dict') else asdict(recommendation))
+            }, default=str, ensure_ascii=False))
             self._save_recommendation(recommendation, cycle_id)
             return recommendation
 
@@ -335,9 +352,19 @@ class Orchestrator:
 
             quality_assessment = await self._call_quality_agent(agent_request)
             logger.info(f"Качество: confidence={quality_assessment.confidence:.3f}")
+            logger.info(json.dumps({
+                "step": "quality_assessment",
+                "timestamp": datetime.now().isoformat(),
+                "data": getattr(quality_assessment, 'dict', None) or (quality_assessment.to_dict() if hasattr(quality_assessment, 'to_dict') else asdict(quality_assessment))
+            }, default=str, ensure_ascii=False))
 
             reliability_assessment = await self._call_reliability_agent(agent_request)
             logger.info(f"Надёжность: risk_class={reliability_assessment.risk_class}")
+            logger.info(json.dumps({
+                "step": "reliability_assessment",
+                "timestamp": datetime.now().isoformat(),
+                "data": getattr(reliability_assessment, 'dict', None) or (reliability_assessment.to_dict() if hasattr(reliability_assessment, 'to_dict') else asdict(reliability_assessment))
+            }, default=str, ensure_ascii=False))
 
             optimization_result = await self._call_optimization_agent(
                 agent_request,
@@ -345,6 +372,11 @@ class Orchestrator:
                 reliability_assessment
             )
             logger.info(f"Оптимизация: {optimization_result.metrics['num_feasible']} допустимых вариантов")
+            logger.info(json.dumps({
+                "step": "optimization",
+                "timestamp": datetime.now().isoformat(),
+                "data": getattr(optimization_result, 'dict', None) or (optimization_result.to_dict() if hasattr(optimization_result, 'to_dict') else asdict(optimization_result))
+            }, default=str, ensure_ascii=False))
 
         except Exception as e:
             logger.error(f"Ошибка агентов: {e}", exc_info=True)
@@ -352,6 +384,11 @@ class Orchestrator:
                 f"Ошибка агентов: {str(e)}",
                 cycle_id=cycle_id
             )
+            logger.info(json.dumps({
+                "step": "recommendation",
+                "timestamp": datetime.now().isoformat(),
+                "data": getattr(recommendation, 'dict', None) or (recommendation.to_dict() if hasattr(recommendation, 'to_dict') else asdict(recommendation))
+            }, default=str, ensure_ascii=False))
             self._save_recommendation(recommendation, cycle_id)
             return recommendation
 
@@ -380,6 +417,11 @@ class Orchestrator:
                 conflict_resolution.explanation,
                 cycle_id=cycle_id
             )
+            logger.info(json.dumps({
+                "step": "recommendation",
+                "timestamp": datetime.now().isoformat(),
+                "data": getattr(recommendation, 'dict', None) or (recommendation.to_dict() if hasattr(recommendation, 'to_dict') else asdict(recommendation))
+            }, default=str, ensure_ascii=False))
             self._save_recommendation(recommendation, cycle_id)
             return recommendation
 
@@ -402,6 +444,11 @@ class Orchestrator:
 
         logger.info(f"Рекомендация: {recommendation.status}")
         logger.info(f"Объяснение: {recommendation.explanation}")
+        logger.info(json.dumps({
+            "step": "recommendation",
+            "timestamp": datetime.now().isoformat(),
+            "data": getattr(recommendation, 'dict', None) or (recommendation.to_dict() if hasattr(recommendation, 'to_dict') else asdict(recommendation))
+        }, default=str, ensure_ascii=False))
 
         # ====================================================================
         # ШАГ 5: Сохранение рекомендации (ORCH-06)
