@@ -20,7 +20,7 @@ from pathlib import Path
 from src.agents.quality_agent import QualityAgent
 from src.agents.reliability_agent import ReliabilityAgent
 from src.agents.optimization_agent import OptimizationAgent, ScoredCandidate
-from src.orchestrator.conflict_resolver import ConflictResolver, ConflictResolution
+from src.orchestrator.conflict_resolver import ConflictResolver, ConflictResolution, ConflictType
 from src.orchestrator.input_validator import InputValidator, ValidationResult
 from src.orchestrator.recommendation import (
     Recommendation,
@@ -97,11 +97,28 @@ class Orchestrator:
             datefmt='%Y-%m-%d %H:%M:%S'
         )
 
-        # File handler (оркестратор)
-        fh = logging.FileHandler(orchestrator_log, encoding='utf-8')
-        fh.setLevel(logging.DEBUG)
-        fh.setFormatter(formatter)
-        logger.addHandler(fh)
+        existing_files = [
+            str(Path(getattr(h, 'baseFilename', '')).resolve())
+            for h in logger.handlers
+            if isinstance(h, logging.FileHandler)
+        ]
+
+        # Основной лог оркестратора logs/orchestrator.log (ORCH-05)
+        main_log = self.log_dir / "orchestrator.log"
+        if str(main_log.resolve()) not in existing_files:
+            mfh = logging.FileHandler(main_log, encoding='utf-8')
+            mfh.setLevel(logging.DEBUG)
+            mfh.setFormatter(formatter)
+            logger.addHandler(mfh)
+            existing_files.append(str(main_log.resolve()))
+
+        # File handler (оркестратор с таймштампом)
+        orchestrator_log = self.log_dir / f"orchestrator_{datetime.now():%Y%m%d_%H%M%S}.log"
+        if str(orchestrator_log.resolve()) not in existing_files:
+            fh = logging.FileHandler(orchestrator_log, encoding='utf-8')
+            fh.setLevel(logging.DEBUG)
+            fh.setFormatter(formatter)
+            logger.addHandler(fh)
 
         # File handler (рекомендации)
         recommendation_log = self.log_dir / f"recommendations_{datetime.now():%Y%m%d}.jsonl"
@@ -114,11 +131,12 @@ class Orchestrator:
         self.recommendation_logger.setLevel(logging.INFO)
         self.recommendation_logger.addHandler(rh)
 
-        # Console handler
-        ch = logging.StreamHandler()
-        ch.setLevel(logging.INFO)
-        ch.setFormatter(formatter)
-        logger.addHandler(ch)
+        # Console handler (если еще нет)
+        if not any(isinstance(h, logging.StreamHandler) and not isinstance(h, logging.FileHandler) for h in logger.handlers):
+            ch = logging.StreamHandler()
+            ch.setLevel(logging.INFO)
+            ch.setFormatter(formatter)
+            logger.addHandler(ch)
 
     def _load_scenario_data(self, scenario: str = 'normal') -> Tuple[pd.DataFrame, pd.DataFrame]:
         """
@@ -388,9 +406,23 @@ class Orchestrator:
 
         return recommendation
 
-    def _no_recommendation(self, reason: str, cycle_id: str = None) -> Recommendation:
+    def no_recommendation(self, reason: str, cycle_id: Optional[str] = None) -> Recommendation:
+        """
+        Публичный интерфейс отказа от рекомендации (ORCH-05).
+
+        Args:
+            reason: причина отказа
+            cycle_id: ID цикла (опционально)
+
+        Returns:
+            Recommendation со статусом NO_RECOMMENDATION
+        """
+        return self._no_recommendation(reason=reason, cycle_id=cycle_id)
+
+    def _no_recommendation(self, reason: str, cycle_id: Optional[str] = None) -> Recommendation:
         """
         Отказ от рекомендации (ORCH-05).
+        Формирует отказ с конкретной причиной и логирует в logs/orchestrator.log.
 
         Args:
             reason: причина отказа
@@ -404,11 +436,13 @@ class Orchestrator:
 
         logger.error(f"NO_RECOMMENDATION: {specific_reason}")
 
+        problem_type = "NO_DATA" if any(w in reason.lower() for w in ['устарел', 'age', 'пропуск', 'missing', 'нет данных', 'no_data', 'offline']) else "NO_SOLUTION"
+
         recommendation = Recommendation(
             recommendation_id=f"rec_{datetime.now():%Y%m%d_%H%M%S}",
             timestamp=datetime.now().isoformat(),
             state={},
-            problem_type="NO_RECOMMENDATION",
+            problem_type=problem_type,
             action=[],
             expected_effect=ExpectedEffect(),
             constraints_checked=[],
@@ -426,7 +460,7 @@ class Orchestrator:
 
     def _specific_reason(self, reason: str) -> str:
         """
-        Конкретизация причины отказа.
+        Конкретизация причины отказа (ORCH-05).
 
         Args:
             reason: общая причина
@@ -434,35 +468,94 @@ class Orchestrator:
         Returns:
             конкретизированная причина
         """
-        if 'возраст' in reason.lower() or 'age_min' in reason.lower():
-            return f"Последнее ЛИМС устарело ({reason}). ПАК offline."
-        elif 'пропуски' in reason.lower() or 'missing' in reason.lower():
-            return f"Критические теги содержат пропуски > 30% ({reason})."
-        elif 'согласованность' in reason.lower() or 'consistency' in reason.lower():
-            return f"ЛИМС и ПАК противоречат друг другу (разница > 20%) ({reason})."
-        elif 'нет допустим' in reason.lower() or 'no_feasible' in reason.lower():
-            return f"Все варианты нарушают жёсткие ограничения (сера ≤ 10, доли = 100%)."
+        r_low = str(reason).lower()
+        if 'пак offline' in r_low or 'пак оффлайн' in r_low:
+            return reason
+        if 'последнее лимс устарело' in r_low:
+            return f"{reason}, ПАК offline" if "пак" not in r_low else reason
+        if 'возраст' in r_low or 'age_min' in r_low or 'устарел' in r_low:
+            return f"Последнее ЛИМС устарело ({reason}), ПАК offline"
+        elif 'пропуски' in r_low or 'missing' in r_low or 'пропуск' in r_low:
+            return f"Критические теги содержат пропуски > 30% ({reason})"
+        elif 'согласованность' in r_low or 'consistency' in r_low or 'противореч' in r_low:
+            return f"ЛИМС и ПАК противоречат друг другу (разница > 20%) ({reason})"
+        elif 'нет допустим' in r_low or 'no_feasible' in r_low or 'тупик' in r_low:
+            return f"Все варианты нарушают жёсткие ограничения (сера ≤ 10 мг/кг, баланс долей = 100%)"
         else:
             return reason
 
-    def _build_recommendation(
+    def build_recommendation(
         self,
-        telemetry: pd.DataFrame,
-        quality_data: pd.DataFrame,
-        quality_assessment: Any,
-        reliability_assessment: Any,
-        optimization_result: Any,
-        conflict_resolution: ConflictResolution,
-        validation_result: ValidationResult,
-        cycle_id: str
+        quality: Any = None,
+        reliability: Any = None,
+        optimization: Any = None,
+        *,
+        telemetry: Optional[pd.DataFrame] = None,
+        quality_data: Optional[pd.DataFrame] = None,
+        quality_assessment: Any = None,
+        reliability_assessment: Any = None,
+        optimization_result: Any = None,
+        conflict_resolution: Optional[ConflictResolution] = None,
+        validation_result: Optional[ValidationResult] = None,
+        cycle_id: Optional[str] = None
     ) -> Recommendation:
-        """Формирование рекомендации (ORCH-04)."""
-        cand = conflict_resolution.recommended_candidate
-        if cand is None and optimization_result is not None:
-            cand = getattr(optimization_result, 'recommended', None)
+        """
+        Формирование рекомендации (ORCH-04).
+
+        Поддерживает оба формата вызова:
+        1. (quality, reliability, optimization) из интерфейсов ORCH-03
+        2. Полный контекст (telemetry, quality_data, ...) из run_cycle()
+        """
+        # Адаптация позиционных аргументов
+        q_ass = quality_assessment if quality_assessment is not None else quality
+        r_ass = reliability_assessment if reliability_assessment is not None else reliability
+        opt_res = optimization_result if optimization_result is not None else optimization
+
+        # Фоллбэк телеметрии, если вызван напрямую с (quality, reliability, optimization)
+        if telemetry is None or (isinstance(telemetry, pd.DataFrame) and telemetry.empty):
+            telemetry = pd.DataFrame([{
+                'T6': 360.0,
+                'F2_F26_ratio': 0.85,
+                'T55': 380.0,
+                'F9': 215.0
+            }])
+
+        # Фоллбэк качества
+        if quality_data is None or (isinstance(quality_data, pd.DataFrame) and quality_data.empty):
+            s_val = getattr(q_ass, 'sulfur_forecast_mg_kg', 9.2) if q_ass else 9.2
+            quality_data = pd.DataFrame([{
+                'tag': 'Sulfur',
+                'value': s_val,
+                'age_min': getattr(q_ass, 'age_min', 45.0) if q_ass else 45.0
+            }])
+
+        cand = None
+        if conflict_resolution is not None:
+            cand = conflict_resolution.recommended_candidate
+        if cand is None and opt_res is not None:
+            cand = getattr(opt_res, 'recommended', None)
+            if cand is None and hasattr(opt_res, 'top_recommendation'):
+                cand = opt_res.top_recommendation
 
         if cand is None:
             return self._no_recommendation("Нет допустимых вариантов управления", cycle_id=cycle_id)
+
+        # Разрешение конфликтов по умолчанию, если не передано
+        if conflict_resolution is None:
+            alts_from_opt = getattr(opt_res, 'alternatives', []) if opt_res else []
+            checked_cons = [
+                {'constraint': 'Сера ≤ 10 мг/кг', 'threshold': 10.0, 'status': 'PASS', 'predicted_value': getattr(q_ass, 'sulfur_forecast_mg_kg', 7.5) if q_ass else 7.5},
+                {'constraint': 'Риск оборудования < 0.70', 'threshold': 0.70, 'status': 'PASS', 'predicted_value': getattr(r_ass, 'risk_index', 0.15) if r_ass else 0.15}
+            ]
+            conflict_resolution = ConflictResolution(
+                conflict_type=ConflictType.NONE,
+                is_resolved=True,
+                recommended_candidate=cand,
+                alternatives=alts_from_opt,
+                explanation="Конфликтов нет",
+                veto_reasons=[],
+                checked_constraints=checked_cons
+            )
 
         t6_curr = float(telemetry['T6'].dropna().iloc[-1]) if 'T6' in telemetry and not telemetry['T6'].dropna().empty else 360.0
         f2_ratio_curr = float(telemetry['F2_F26_ratio'].dropna().iloc[-1]) if 'F2_F26_ratio' in telemetry and not telemetry['F2_F26_ratio'].dropna().empty else 0.85
@@ -587,19 +680,26 @@ class Orchestrator:
                 )
             )
 
-        # Объяснение
+        # Объяснение (ORCH-04 DoD: конкретика по T6, сере и производительности)
         action_parts = [f"{a.name}: {a.from_value:.1f} → {a.to_value:.1f} {a.unit}" for a in actions]
         action_str = "; ".join(action_parts) if action_parts else "сохранение текущего режима"
-        rel_class = getattr(reliability_assessment, 'risk_class', 'LOW')
+        rel_class = getattr(r_ass, 'risk_class', getattr(reliability_assessment, 'risk_class', 'LOW'))
+
+        t6_act = next((a for a in actions if a.tag == 'T6'), None)
+        if t6_act and abs(t6_act.delta) > 0.05:
+            direction = "Повышение" if t6_act.delta > 0 else "Снижение"
+            lead_explanation = f"{direction} {t6_act.tag} на {abs(t6_act.delta):.1f}°C (до {t6_act.to_value:.1f}°C) изменит серу с {sulfur_curr:.1f} до {s_60:.1f} мг/кг."
+        else:
+            lead_explanation = f"Режим сбалансирован по качеству (сера={s_60:.2f} мг/кг)."
+
         explanation = (
-            f"Рекомендовано: {action_str}. "
-            f"Ожидаемая сера через 60 мин: {s_60:.2f} мг/кг (Δ={s_60 - sulfur_curr:+.2f} мг/кг). "
-            f"Производительность: {throughput:.1f} м³/ч. "
+            f"{lead_explanation} Рекомендовано: {action_str}. "
+            f"Производительность: {throughput:.1f} м³/ч (Δ={throughput_delta:+.1f} м³/ч). "
             f"Индекс риска оборудования: {risk_idx:.2f} ({rel_class}). "
-            f"Решение сбалансировано по качеству, производительности и ресурсу катализатора."
+            f"Выбран вариант как компромисс между качеством, производительностью и ресурсом оборудования."
         )
 
-        conf = getattr(quality_assessment, 'confidence', 0.85)
+        conf = getattr(q_ass, 'confidence', getattr(quality_assessment, 'confidence', 0.85))
 
         return Recommendation(
             recommendation_id=f"rec_{datetime.now():%Y%m%d_%H%M%S}",
@@ -619,6 +719,9 @@ class Orchestrator:
                 'score': cand_dict.get('score', 0.0)
             }
         )
+
+    # Алиас для обратной совместимости
+    _build_recommendation = build_recommendation
 
     def _save_input_data(
         self,

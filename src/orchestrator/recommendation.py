@@ -22,6 +22,45 @@ import pandas as pd
 import json
 
 
+class ActionList(list):
+    """
+    Список действий с поддержкой доступа по тегу как в dict,
+    а также конвертации в словарь.
+    """
+    def __getitem__(self, key):
+        if isinstance(key, str):
+            for item in self:
+                item_tag = getattr(item, 'tag', None)
+                if item_tag is None and isinstance(item, dict):
+                    item_tag = item.get('tag')
+                if item_tag == key:
+                    return item
+            raise KeyError(key)
+        return super().__getitem__(key)
+
+    def get(self, key, default=None):
+        try:
+            return self[key]
+        except KeyError:
+            return default
+
+    def to_dict(self) -> Dict[str, Any]:
+        result = {}
+        for item in self:
+            tag = getattr(item, 'tag', None) or (item.get('tag') if isinstance(item, dict) else None)
+            if tag:
+                if hasattr(item, 'to_dict'):
+                    result[tag] = item.to_dict()
+                elif isinstance(item, dict):
+                    result[tag] = item
+                else:
+                    result[tag] = {
+                        'from': getattr(item, 'from_value', 0.0),
+                        'to': getattr(item, 'to_value', 0.0)
+                    }
+        return result
+
+
 # ============================================================================
 # DATA CLASSES
 # ============================================================================
@@ -49,6 +88,34 @@ class ActionItem:
     unit: str
     delta: float
     delta_percent: float
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            'tag': self.tag,
+            'name': self.name,
+            'from': self.from_value,
+            'to': self.to_value,
+            'unit': self.unit,
+            'delta': self.delta,
+            'delta_percent': self.delta_percent
+        }
+
+    def __getitem__(self, key: str) -> Any:
+        k = str(key).lower()
+        if k in ('tag',): return self.tag
+        if k in ('name',): return self.name
+        if k in ('from', 'from_value'): return self.from_value
+        if k in ('to', 'to_value'): return self.to_value
+        if k in ('unit',): return self.unit
+        if k in ('delta',): return self.delta
+        if k in ('delta_percent', 'deltapercent'): return self.delta_percent
+        raise KeyError(key)
+
+    def get(self, key: str, default: Any = None) -> Any:
+        try:
+            return self[key]
+        except KeyError:
+            return default
 
 
 @dataclass
@@ -81,6 +148,58 @@ class ExpectedEffect:
     risk_index: Optional[float] = None
     risk_delta: Optional[float] = None
 
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            'Sulfur_60min': self.sulfur_60min,
+            'Sulfur_delta': self.sulfur_delta,
+            'D15_60min': self.d15_60min,
+            'T95_60min': self.t95_60min,
+            'CFPP_60min': self.cfpp_60min,
+            'throughput': self.throughput,
+            'throughput_delta': self.throughput_delta,
+            'energy_proxy': self.energy_proxy,
+            'energy_delta': self.energy_delta,
+            'risk_index': self.risk_index,
+            'risk_delta': self.risk_delta
+        }
+
+    def __getitem__(self, key: str) -> Any:
+        k = str(key).lower()
+        field_map = {
+            'sulfur_60min': self.sulfur_60min,
+            'sulfur60min': self.sulfur_60min,
+            'sulfur_delta': self.sulfur_delta,
+            'd15_60min': self.d15_60min,
+            't95_60min': self.t95_60min,
+            'cfpp_60min': self.cfpp_60min,
+            'throughput': self.throughput,
+            'throughput_delta': self.throughput_delta,
+            'throughput_change': self.throughput_delta,
+            'energy_proxy': self.energy_proxy,
+            'energy_delta': self.energy_delta,
+            'risk_index': self.risk_index,
+            'risk_delta': self.risk_delta
+        }
+        if k in field_map:
+            return field_map[k]
+        raise KeyError(key)
+
+    def get(self, key: str, default: Any = None) -> Any:
+        try:
+            val = self[key]
+            return val if val is not None else default
+        except KeyError:
+            return default
+
+    def keys(self):
+        return self.to_dict().keys()
+
+    def values(self):
+        return self.to_dict().values()
+
+    def items(self):
+        return self.to_dict().items()
+
 
 @dataclass
 class ConstraintCheck:
@@ -103,6 +222,32 @@ class ConstraintCheck:
     threshold: float
     status: str  # "PASS" или "FAIL"
     margin: float
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            'constraint_id': self.constraint_id,
+            'constraint': self.constraint,
+            'predicted_value': self.predicted_value,
+            'threshold': self.threshold,
+            'status': self.status,
+            'margin': self.margin
+        }
+
+    def __getitem__(self, key: str) -> Any:
+        k = str(key).lower()
+        if k in ('constraint_id', 'id'): return self.constraint_id
+        if k in ('constraint', 'name'): return self.constraint
+        if k in ('predicted_value', 'value'): return self.predicted_value
+        if k in ('threshold', 'limit'): return self.threshold
+        if k in ('status',): return self.status
+        if k in ('margin',): return self.margin
+        raise KeyError(key)
+
+    def get(self, key: str, default: Any = None) -> Any:
+        try:
+            return self[key]
+        except KeyError:
+            return default
 
 
 @dataclass
@@ -130,6 +275,36 @@ class Alternative:
     risk_index: float
     delta_score: float
     delta_throughput: float
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            'id': self.id,
+            'action': self.action,
+            'score': self.score,
+            'throughput': self.throughput,
+            'energy_proxy': self.energy_proxy,
+            'risk_index': self.risk_index,
+            'delta_score': self.delta_score,
+            'delta_throughput': self.delta_throughput
+        }
+
+    def __getitem__(self, key: str) -> Any:
+        k = str(key).lower()
+        if k in ('id',): return self.id
+        if k in ('action', 'params'): return self.action
+        if k in ('score',): return self.score
+        if k in ('throughput',): return self.throughput
+        if k in ('energy_proxy', 'energy'): return self.energy_proxy
+        if k in ('risk_index', 'risk'): return self.risk_index
+        if k in ('delta_score',): return self.delta_score
+        if k in ('delta_throughput',): return self.delta_throughput
+        raise KeyError(key)
+
+    def get(self, key: str, default: Any = None) -> Any:
+        try:
+            return self[key]
+        except KeyError:
+            return default
 
 
 @dataclass
@@ -184,29 +359,108 @@ class Recommendation:
     # Проблема/риск
     problem_type: str  # "RISK_SPEC_VIOLATION", "SUBOPTIMAL", "NO_DATA", "NO_SOLUTION"
 
-    # Действие
-    action: List[ActionItem]
+    # Действие: Dict[str, Any] или List[ActionItem]
+    action: Any
 
-    # Ожидаемый эффект
-    expected_effect: ExpectedEffect
+    # Ожидаемый эффект: Dict[str, Any] или ExpectedEffect
+    expected_effect: Any
 
-    # Проверенные ограничения
-    constraints_checked: List[ConstraintCheck]
+    # Проверенные ограничения: List[Dict[str, Any]] или List[ConstraintCheck]
+    constraints_checked: List[Any]
 
     # Уверенность
     confidence: float
 
-    # Статус
-    status: str  # "RECOMMENDED" или "NO_RECOMMENDATION"
+    # Статус: "RECOMMENDED" или "NO_RECOMMENDATION"
+    status: str
 
-    # Альтернативы
-    alternatives: List[Alternative]
+    # Альтернативы: List[Dict[str, Any]] или List[Alternative]
+    alternatives: List[Any]
 
     # Объяснение
     explanation: str
 
     # Дополнительные метаданные
     metadata: Dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self):
+        # Нормализация action
+        if isinstance(self.action, dict):
+            if not self.action:
+                self.action = ActionList()
+            else:
+                al = ActionList()
+                for tag, val in self.action.items():
+                    if isinstance(val, dict):
+                        from_val = float(val.get('from', val.get('from_value', 0.0)))
+                        to_val = float(val.get('to', val.get('to_value', 0.0)))
+                        unit = str(val.get('unit', '°C' if 'T' in tag else ('м³/ч' if 'F9' in tag else '-')))
+                        name = str(val.get('name', tag))
+                        al.append(create_action_item(tag, name, from_val, to_val, unit))
+                    elif isinstance(val, (int, float)):
+                        al.append(create_action_item(tag, tag, float(val), float(val), ''))
+                self.action = al
+        elif isinstance(self.action, list) and not isinstance(self.action, ActionList):
+            self.action = ActionList(self.action)
+
+        # Нормализация expected_effect
+        if isinstance(self.expected_effect, dict) and not isinstance(self.expected_effect, ExpectedEffect):
+            ee_dict = self.expected_effect
+            self.expected_effect = ExpectedEffect(
+                sulfur_60min=ee_dict.get('Sulfur_60min', ee_dict.get('sulfur_60min')),
+                sulfur_delta=ee_dict.get('Sulfur_delta', ee_dict.get('sulfur_delta')),
+                d15_60min=ee_dict.get('D15_60min', ee_dict.get('d15_60min')),
+                t95_60min=ee_dict.get('T95_60min', ee_dict.get('t95_60min')),
+                cfpp_60min=ee_dict.get('CFPP_60min', ee_dict.get('cfpp_60min')),
+                throughput=ee_dict.get('throughput', ee_dict.get('F9')),
+                throughput_delta=ee_dict.get('throughput_delta', ee_dict.get('throughput_change')),
+                energy_proxy=ee_dict.get('energy_proxy'),
+                energy_delta=ee_dict.get('energy_delta'),
+                risk_index=ee_dict.get('risk_index'),
+                risk_delta=ee_dict.get('risk_delta')
+            )
+        elif self.expected_effect is None:
+            self.expected_effect = ExpectedEffect()
+
+        # Нормализация constraints_checked
+        if isinstance(self.constraints_checked, list):
+            norm_constraints = []
+            for c in self.constraints_checked:
+                if isinstance(c, dict):
+                    norm_constraints.append(
+                        ConstraintCheck(
+                            constraint_id=c.get('constraint_id', f"C_{len(norm_constraints)+1:03d}"),
+                            constraint=c.get('constraint', c.get('name', 'Ограничение')),
+                            predicted_value=float(c.get('predicted_value', c.get('value', 0.0))),
+                            threshold=float(c.get('threshold', 0.0)),
+                            status=str(c.get('status', 'PASS')),
+                            margin=float(c.get('margin', 0.0))
+                        )
+                    )
+                else:
+                    norm_constraints.append(c)
+            self.constraints_checked = norm_constraints
+
+        # Нормализация alternatives
+        if isinstance(self.alternatives, list):
+            norm_alts = []
+            for alt in self.alternatives:
+                if isinstance(alt, dict):
+                    norm_alts.append(
+                        Alternative(
+                            id=int(alt.get('id', len(norm_alts)+1)),
+                            action=alt.get('action', alt.get('params', {})),
+                            score=float(alt.get('score', 0.0)),
+                            throughput=float(alt.get('throughput', 0.0)),
+                            energy_proxy=float(alt.get('energy_proxy', 0.0)),
+                            risk_index=float(alt.get('risk_index', 0.0)),
+                            delta_score=float(alt.get('delta_score', 0.0)),
+                            delta_throughput=float(alt.get('delta_throughput', 0.0))
+                        )
+                    )
+                else:
+                    norm_alts.append(alt)
+            self.alternatives = norm_alts
 
     def is_recommended(self) -> bool:
         """
@@ -224,58 +478,38 @@ class Recommendation:
         Returns:
             Dict с полями рекомендации
         """
+        actions_serialized = [
+            a.to_dict() if hasattr(a, 'to_dict') else a
+            for a in self.action
+        ] if isinstance(self.action, list) else (
+            self.action.to_dict() if hasattr(self.action, 'to_dict') else self.action
+        )
+
+        ee_serialized = self.expected_effect.to_dict() if hasattr(self.expected_effect, 'to_dict') else (
+            self.expected_effect if isinstance(self.expected_effect, dict) else {}
+        )
+
+        constraints_serialized = [
+            c.to_dict() if hasattr(c, 'to_dict') else c
+            for c in self.constraints_checked
+        ]
+
+        alts_serialized = [
+            alt.to_dict() if hasattr(alt, 'to_dict') else alt
+            for alt in self.alternatives
+        ]
+
         return {
             'recommendation_id': self.recommendation_id,
             'timestamp': self.timestamp,
             'state': self.state,
             'problem_type': self.problem_type,
-            'action': [
-                {
-                    'tag': a.tag,
-                    'name': a.name,
-                    'from': a.from_value,
-                    'to': a.to_value,
-                    'unit': a.unit,
-                    'delta': a.delta,
-                    'delta_percent': a.delta_percent
-                }
-                for a in self.action
-            ],
-            'expected_effect': {
-                'Sulfur_60min': self.expected_effect.sulfur_60min,
-                'Sulfur_delta': self.expected_effect.sulfur_delta,
-                'D15_60min': self.expected_effect.d15_60min,
-                'throughput': self.expected_effect.throughput,
-                'throughput_delta': self.expected_effect.throughput_delta,
-                'energy_proxy': self.expected_effect.energy_proxy,
-                'risk_index': self.expected_effect.risk_index
-            },
-            'constraints_checked': [
-                {
-                    'constraint_id': c.constraint_id,
-                    'constraint': c.constraint,
-                    'predicted_value': c.predicted_value,
-                    'threshold': c.threshold,
-                    'status': c.status,
-                    'margin': c.margin
-                }
-                for c in self.constraints_checked
-            ],
+            'action': actions_serialized,
+            'expected_effect': ee_serialized,
+            'constraints_checked': constraints_serialized,
             'confidence': self.confidence,
             'status': self.status,
-            'alternatives': [
-                {
-                    'id': alt.id,
-                    'action': alt.action,
-                    'score': alt.score,
-                    'throughput': alt.throughput,
-                    'energy_proxy': alt.energy_proxy,
-                    'risk_index': alt.risk_index,
-                    'delta_score': alt.delta_score,
-                    'delta_throughput': alt.delta_throughput
-                }
-                for alt in self.alternatives
-            ],
+            'alternatives': alts_serialized,
             'explanation': self.explanation,
             'metadata': self.metadata,
             'is_recommended': self.is_recommended()
