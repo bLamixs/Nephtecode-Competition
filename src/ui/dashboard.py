@@ -415,7 +415,7 @@ with tab_telemetry:
             plot_df['F9'] = plot_df['F9_avt']
 
         if 'P8' not in plot_df.columns:
-            plot_df['P8'] = 32.0
+            plot_df['P8'] = 0.17
 
     n_rows = len(plot_df)
 
@@ -560,24 +560,31 @@ with tab_telemetry:
         # 4. График давления реактора P8
         fig_p = go.Figure()
         fig_p.add_hrect(
-            y0=28.0, y1=36.0,
+            y0=0.10, y1=0.23,
             fillcolor="rgba(16, 185, 129, 0.08)",
             line_width=0,
             layer="below"
         )
-        p_vals = np.clip(plot_df['P8'].values, 10.0, 45.0) if 'P8' in plot_df.columns else np.random.normal(32.0, 0.3, n_rows)
+        if 'P8' in plot_df.columns:
+            raw_p = plot_df['P8'].values
+            # Коррекция устаревших шкал (> 5.0 кгс/см² -> МПа)
+            raw_p = np.where(raw_p > 5.0, raw_p / 100.0, raw_p)
+            p_vals = np.clip(raw_p, 0.05, 0.35)
+        else:
+            p_vals = np.random.normal(0.17, 0.015, n_rows)
+
         fig_p.add_trace(go.Scatter(
             x=plot_df['date'],
             y=p_vals,
             mode='lines',
-            name='P8 Давление (кгс/см²)',
+            name='P8 Перепад давления (МПа)',
             line=dict(color='#059669', width=2.5, shape='spline')
         ))
 
         fig_p.update_layout(
-            title=f"Давление в реакторе P8 ({horizon_label})",
+            title=f"Перепад давления в реакторе P8 ({horizon_label})",
             xaxis_title="",
-            yaxis_title="кгс/см²",
+            yaxis_title="МПа",
             height=340,
             hovermode="x unified",
             margin=dict(l=20, r=20, t=40, b=20),
