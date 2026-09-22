@@ -1,4 +1,4 @@
-.PHONY: help run run-risk run-missing run-no-solution test test-agents test-scenarios test-no-leak dashboard db-init load-data README
+.PHONY: help run run-risk run-missing run-no-solution test test-agents test-scenarios test-no-leak dashboard db-init load-data README zip pack
 
 # Определение интерпретатора Python (предпочтительно venv, если есть)
 PYTHON ?= $(shell if [ -f "./venv/bin/python" ]; then echo "./venv/bin/python"; else echo "python3"; fi)
@@ -18,6 +18,7 @@ help:
 	@echo "  make dashboard        - Запуск веб-дашборда оператора"
 	@echo "  make db-init          - Инициализация схемы базы данных"
 	@echo "  make load-data        - Первичная загрузка и конвертация данных в Parquet"
+	@echo "  make zip              - Сборка легковесного zip-архива для отправки жюри (<10 МБ)"
 	@echo "  make README           - Вывод ссылки на README"
 
 README:
@@ -55,3 +56,24 @@ test-no-leak:
 
 dashboard:
 	$(STREAMLIT) run src/ui/dashboard.py
+
+zip: pack
+
+pack:
+	@echo "📦 Сборка чистого zip-архива решения без тяжелых CSV, Parquet, logs и venv..."
+	@rm -f neftecode_solution.zip
+	@zip -q -r neftecode_solution.zip . \
+		-x "venv/*" \
+		-x "logs/*.log" -x "logs/*.json" -x "logs/*.jsonl" \
+		-x "htmlcov/*" \
+		-x ".git/*" \
+		-x ".pytest_cache/*" \
+		-x "*/__pycache__/*" \
+		-x "*.pyc" \
+		-x ".coverage" \
+		-x ".DS_Store" -x "*/.DS_Store" \
+		-x "data/raw/avt_tags.csv" -x "data/raw/242000_tags.csv" -x "data/raw/*.rar" \
+		-x "data/processed/*.parquet" -x "data/processed/*.csv" \
+		-x "output/recommendations/*" -x "output/*.db" -x "*.zip"
+	@echo "✅ Архив успешно создан: neftecode_solution.zip"
+	@du -sh neftecode_solution.zip
