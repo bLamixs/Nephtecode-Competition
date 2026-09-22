@@ -18,7 +18,8 @@ help:
 	@echo "  make dashboard        - Запуск веб-дашборда оператора"
 	@echo "  make db-init          - Инициализация схемы базы данных"
 	@echo "  make load-data        - Первичная загрузка и конвертация данных в Parquet"
-	@echo "  make zip              - Сборка легковесного zip-архива для отправки жюри (<10 МБ)"
+	@echo "  make zip              - Сборка полного zip-архива с сырыми данными data/raw (~135 МБ)"
+	@echo "  make zip-light        - Сборка легковесного zip-архива без больших CSV (~8.5 МБ)"
 	@echo "  make README           - Вывод ссылки на README"
 
 README:
@@ -57,12 +58,31 @@ test-no-leak:
 dashboard:
 	$(STREAMLIT) run src/ui/dashboard.py
 
-zip: pack
+zip: zip-full
 
-pack:
-	@echo "📦 Сборка чистого zip-архива решения без тяжелых CSV, Parquet, logs и venv..."
+zip-full:
+	@echo "📦 Сборка полного zip-архива с сырыми данными data/raw (~135 МБ)..."
 	@rm -f neftecode_solution.zip
 	@zip -q -r neftecode_solution.zip . \
+		-x "venv/*" \
+		-x "logs/*.log" -x "logs/*.json" -x "logs/*.jsonl" \
+		-x "htmlcov/*" \
+		-x ".git/*" \
+		-x ".pytest_cache/*" \
+		-x "*/__pycache__/*" \
+		-x "*.pyc" \
+		-x ".coverage" \
+		-x ".DS_Store" -x "*/.DS_Store" \
+		-x "data/raw/*.rar" \
+		-x "data/processed/*.parquet" -x "data/processed/*.csv" \
+		-x "output/recommendations/*" -x "output/*.db" -x "*.zip"
+	@echo "✅ Полный архив с сырыми данными создан: neftecode_solution.zip"
+	@du -sh neftecode_solution.zip
+
+zip-light:
+	@echo "📦 Сборка легковесного zip-архива без больших CSV (~8.5 МБ)..."
+	@rm -f neftecode_solution_light.zip
+	@zip -q -r neftecode_solution_light.zip . \
 		-x "venv/*" \
 		-x "logs/*.log" -x "logs/*.json" -x "logs/*.jsonl" \
 		-x "htmlcov/*" \
@@ -75,5 +95,5 @@ pack:
 		-x "data/raw/avt_tags.csv" -x "data/raw/242000_tags.csv" -x "data/raw/*.rar" \
 		-x "data/processed/*.parquet" -x "data/processed/*.csv" \
 		-x "output/recommendations/*" -x "output/*.db" -x "*.zip"
-	@echo "✅ Архив успешно создан: neftecode_solution.zip"
-	@du -sh neftecode_solution.zip
+	@echo "✅ Легковесный архив создан: neftecode_solution_light.zip"
+	@du -sh neftecode_solution_light.zip
